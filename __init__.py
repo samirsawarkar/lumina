@@ -98,6 +98,17 @@ def _read_text(a):
     return res
 
 
+def _make_memory(a):
+    u = a.get("uuids")
+    if not u:
+        if not any(a.get(k) for k in _SEARCH_KEYS[:6]):
+            raise photos.LuminaError("bad_args", "Give uuids from a previous lumina_search, or at least one search filter.")
+        u = photos.search(photos.get_db(), **{k: a[k] for k in _SEARCH_KEYS[:6] if a.get(k)}, limit=200)["all_uuids"]
+        if not u:
+            raise photos.LuminaError("not_found", "No photos matched, so there is nothing to make a memory from.")
+    return photos.make_memory(photos.get_db(), u, a.get("title") or _title(a))
+
+
 def _album(a):
     photos.get_db()  # surfaces no_access / no_library before touching Photos
     return photos.create_album(a.get("name"), a.get("uuids"))
@@ -119,6 +130,11 @@ def _guard(tool_name, args, **kwargs):
         if not isinstance(u, list) or not 0 < len(u) <= 5 or not all(isinstance(x, str) and photos.UUID_RE.fullmatch(x) for x in u):
             return {"action": "block", "message": "lumina_read_text needs 1-5 photo uuids from a previous lumina_search."}
         return None
+    if tool_name == "lumina_make_memory":
+        u = (args or {}).get("uuids")
+        if u is not None and (not isinstance(u, list) or not 0 < len(u) <= 200 or not all(isinstance(x, str) and photos.UUID_RE.fullmatch(x) for x in u)):
+            return {"action": "block", "message": "lumina_make_memory uuids must be 1-200 photo uuids from a previous lumina_search."}
+        return None
     if tool_name != "lumina_create_album":
         return None
     u = (args or {}).get("uuids")
@@ -127,12 +143,16 @@ def _guard(tool_name, args, **kwargs):
     return None
 
 
+_PENDING_MEDIA = {}  # session -> MEDIA line from this turn's lumina_make_memory (all platforms)
 _PENDING = {}  # session -> display from this turn's lumina_search; capped, cleared on use and at the next turn
 _MARKER = "::lumina-photos{"
 _PHOTO_RE = re.compile(r"\b(photos?|pictures?|pics?|albums?|selfies?|screenshots?|find my|passport|receipt)\b", re.I)
 _ASK_RE = re.compile(r"\b(when (does|is)|what'?s my|what is my|how much|number|password|expir\w*|total|code|pin)\b", re.I)
 _DOC_RE = re.compile(r"\b(passport|receipt|bill|ticket|card|wi-?fi|licen[cs]e)\b", re.I)
 _SEND_RE = re.compile(r"\b(send|share|text|message|forward|whatsapp|telegram)\b", re.I)
+_MEMORY_RE = re.compile(r"\b(memory|memories|recap|slideshow|video|movie|film|montage|reel)\b", re.I)
+_THIS_DAY_RE = re.compile(r"\bon this day\b", re.I)
+_TRIP_RE = re.compile(r"\b(trips?|holidays?|vacations?|weddings?|birthdays?|years?|(19|20)\d\d)\b", re.I)
 _LOCAL_SURFACES = {"", "cli", "tui", "desktop", "local"}  # Hermes agent.platform values with an in-app photo grid
 
 
@@ -146,6 +166,8 @@ _ASK_HINT = ("The answer may be written inside one of the user's photos. Call lu
 _SEND_HINT = ("The user is on a messaging platform and wants photos sent. Call lumina_search, then lumina_export with the chosen uuids "
               "(max 10) and put each returned MEDIA:<path> line on its own line in your reply so the image is delivered. "
               "Do not paste the ::lumina-photos directive here.")
+_MEMORY_HINT = ("The user wants a memory video. Call lumina_make_memory with the matching filters (text/person/place/label/date_from/date_to), "
+                "or uuids from the last search, then put the returned `media` line on its own line in your reply and add one warm sentence.")
 _HINT = ("Lumina's lumina_search is the source of truth for the user's Apple Photos library: use it, not terminal or file search, "
          "for photo questions. Present what it finds without judging whether images are real or samples. The photo grid is attached "
          "automatically, so answer in one or two short sentences and do not list uuids or file paths.")
@@ -154,6 +176,17 @@ _HINT = ("Lumina's lumina_search is the source of truth for the user's Apple Pho
 def _remember(tool_name, result, session_id="", **kwargs):
     """post_tool_call: keep the latest lumina_search display for this session."""
     key = session_id  # transform_llm_output / pre_llm_call only receive session_id
+    if tool_name == "lumina_make_memory" and key:
+        try:
+            m = json.loads(result).get("media")
+        except Exception:
+            return
+        if m:
+            _PENDING_MEDIA.pop(key, None)
+            _PENDING_MEDIA[key] = m
+            while len(_PENDING_MEDIA) > 200:
+                _PENDING_MEDIA.pop(next(iter(_PENDING_MEDIA)))
+        return
     if tool_name not in ("lumina_search", "lumina_on_this_day", "lumina_read_text") or not key:
         return
     try:
@@ -169,6 +202,9 @@ def _remember(tool_name, result, session_id="", **kwargs):
 
 def _append(response_text="", session_id="", platform="", **kwargs):
     """transform_llm_output: add the grid directive if the model forgot it (desktop only; chat apps cannot render it)."""
+    m = _PENDING_MEDIA.pop(session_id, None)
+    if m and m not in response_text:
+        return f"{response_text.rstrip()}\n\n{m}"
     d = _PENDING.pop(session_id, None)
     if d and _MARKER not in response_text and not _messaging(platform):
         return f"{response_text.rstrip()}\n\n{d}"
@@ -178,6 +214,10 @@ def _append(response_text="", session_id="", platform="", **kwargs):
 def _route(user_message="", session_id="", platform="", **kwargs):
     """pre_llm_call: new turn drops stale state; photo-ish requests get a nudge toward lumina_search."""
     _PENDING.pop(session_id, None)
+    _PENDING_MEDIA.pop(session_id, None)
+    if (isinstance(user_message, str) and _MEMORY_RE.search(user_message) and not _THIS_DAY_RE.search(user_message)
+            and (_PHOTO_RE.search(user_message) or _TRIP_RE.search(user_message))):
+        return {"context": _HINT + " " + _MEMORY_HINT}
     if isinstance(user_message, str) and _ASK_RE.search(user_message) and (_PHOTO_RE.search(user_message) or _DOC_RE.search(user_message)):
         return {"context": _HINT + " " + _ASK_HINT}
     if isinstance(user_message, str) and _PHOTO_RE.search(user_message):
@@ -238,6 +278,20 @@ _SCHEMAS = {
             "uuids": {"type": "array", "items": _STR, "minItems": 1, "maxItems": 5},
         }},
     },
+    "lumina_make_memory": {
+        "name": "lumina_make_memory",
+        "description": "Make a short (~20 s) memory video from photos: picks up to 12 spread across the time span, with slow zoom and captions. "
+                       "Give `uuids` from lumina_search, or search filters (text, person, place, label, date_from, date_to). "
+                       "Put the returned `media` line on its own line in your reply, with no other text on that line; it plays inline in "
+                       "Hermes Desktop and is delivered as a video on Telegram/WhatsApp. Say one warm sentence about it.",
+        "parameters": {"type": "object", "properties": {
+            "uuids": {"type": "array", "items": _STR, "minItems": 1, "maxItems": 200},
+            "title": {**_STR, "description": "Title card text; default is derived from the filters"},
+            "text": _STR, "person": _STR, "place": _STR, "label": _STR,
+            "date_from": {**_STR, "description": "ISO date YYYY-MM-DD"},
+            "date_to": {**_STR, "description": "ISO date YYYY-MM-DD"},
+        }},
+    },
     "lumina_library_info": {
         "name": "lumina_library_info",
         "description": "Photo and video counts, top named people, and whether Lumina can read the library. Use for onboarding or permission checks.",
@@ -246,7 +300,7 @@ _SCHEMAS = {
 }
 _HANDLERS = {"lumina_search": _search, "lumina_create_album": _album, "lumina_library_info": _info,
              "lumina_on_this_day": _on_this_day, "lumina_export": _export,
-             "lumina_read_text": _read_text}
+             "lumina_read_text": _read_text, "lumina_make_memory": _make_memory}
 
 
 def register(ctx):
