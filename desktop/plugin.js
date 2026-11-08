@@ -365,8 +365,7 @@ export default {
       data: {
         name: 'lumina-photos',
         render: (props) => jsx(PhotosDirective, { ...props, ctx })
-      },
-      render: (props) => jsx(PhotosDirective, { ...props, ctx })
+      }
     })
 
     ctx.register({
