@@ -15,7 +15,7 @@ photos = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(photos)
 
 router = APIRouter()
-_UUID = re.compile(r"^[0-9A-Fa-f-]{8,64}$")
+_UUID = re.compile(r"^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$")
 
 
 def _db():

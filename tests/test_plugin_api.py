@@ -31,9 +31,10 @@ def test_thumbs_validation(monkeypatch, library):
     c, _ = client(monkeypatch, library)
     base = "/api/plugins/lumina"
     assert c.get(f"{base}/thumbs", params={"uuids": ""}).status_code == 400
-    assert c.get(f"{base}/thumbs", params={"uuids": ",".join(["AAAAAAAA"] * 61)}).status_code == 400
+    assert c.get(f"{base}/thumbs", params={"uuids": ",".join(["00000000-0000-0000-0000-000000000000"] * 61)}).status_code == 400
+    assert c.get(f"{base}/thumbs", params={"uuids": "--------"}).status_code == 400
     assert c.get(f"{base}/thumbs", params={"uuids": "../x"}).status_code == 400
-    assert c.get(f"{base}/thumbs", params={"uuids": "AAAAAAAA", "size": "xl"}).status_code == 400
+    assert c.get(f"{base}/thumbs", params={"uuids": "00000000-0000-0000-0000-000000000000", "size": "xl"}).status_code == 400
     assert c.get(f"{base}/open", params={"uuid": "bad id"}).status_code == 400
 
 
