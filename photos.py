@@ -5,8 +5,10 @@ from __future__ import annotations
 import base64
 import datetime as dt
 import io
+import json
 import logging
 import os
+import sqlite3
 import threading
 from pathlib import Path
 
@@ -68,6 +70,54 @@ def _classify(exc: Exception) -> LuminaError:
     return LuminaError("photos_app_error", PHOTOS_ERR_MSG)
 
 
+# ---- OCR cache: detected_text() is slow Apple Vision OCR, so persist it per photo ----
+_cache_dir: Path | None = None
+
+
+def set_cache_dir(path) -> None:
+    global _cache_dir
+    _cache_dir = Path(path) if path else None
+
+
+def _cache_file() -> Path:
+    d = _cache_dir or Path(os.environ.get("HERMES_HOME") or "~/.hermes").expanduser() / "plugin-data" / "lumina"
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "ocr.sqlite"
+
+
+def _sig(p) -> str:
+    # modification date changes on edits; fingerprint covers Photos <=4 where it is None
+    return f"{p.date_modified.isoformat() if getattr(p, 'date_modified', None) else ''}|{getattr(p, 'fingerprint', None) or ''}"
+
+
+def ocr_text(p) -> list[str]:
+    """Detected text strings for a still image, cached in sqlite by uuid + signature. Cache errors are logged, never raised."""
+    if p.ismovie:
+        return []
+    con = sig = None
+    try:
+        sig = _sig(p)
+        con = sqlite3.connect(_cache_file())
+        con.execute("CREATE TABLE IF NOT EXISTS ocr (uuid TEXT PRIMARY KEY, sig TEXT, text TEXT)")
+        row = con.execute("SELECT sig, text FROM ocr WHERE uuid=?", (p.uuid,)).fetchone()
+        if row and row[0] == sig:
+            return json.loads(row[1])
+    except Exception as e:
+        log.warning("OCR cache read failed", exc_info=e)
+    try:
+        out = [s for s, _ in p.detected_text()]
+        if con is not None:
+            try:
+                con.execute("INSERT OR REPLACE INTO ocr VALUES (?,?,?)", (p.uuid, sig, json.dumps(out)))
+                con.commit()
+            except Exception as e:
+                log.warning("OCR cache write failed", exc_info=e)
+        return out
+    finally:
+        if con is not None:
+            con.close()
+
+
 # ---- search ----
 def _is_local(p) -> bool:
     return bool(p.path and os.path.exists(p.path)) or any(os.path.exists(d) for d in (p.path_derivatives or []))
@@ -75,7 +125,7 @@ def _is_local(p) -> bool:
 
 def _snippet(p) -> str | None:
     try:
-        t = " ".join(s for s, _ in p.detected_text())
+        t = " ".join(ocr_text(p))
     except Exception:
         return None
     return t[:80] or None
@@ -142,7 +192,7 @@ def search(db, text=None, person=None, place=None, label=None, date_from=None, d
             hay = [p.title, p.description, p.place.name if p.place else "", *(p.labels or []), *(p.keywords or [])]
             if not any(t in low(h) for h in hay):
                 try:
-                    if not any(t in low(s) for s, _ in p.detected_text()):
+                    if not any(t in low(s) for s in ocr_text(p)):
                         continue
                 except Exception:
                     continue

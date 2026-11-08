@@ -23,3 +23,10 @@ def db(library):
     import osxphotos
 
     return osxphotos.PhotosDB(dbfile=library)
+
+
+@pytest.fixture(autouse=True)
+def _ocr_cache_dir(tmp_path, monkeypatch):
+    from lumina import photos
+
+    monkeypatch.setattr(photos, "_cache_dir", tmp_path)  # never touch the real plugin-data

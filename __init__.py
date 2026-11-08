@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import platform
+import re
 from pathlib import Path
 
 from . import photos
@@ -28,8 +29,22 @@ def _json(fn):
 _SEARCH_KEYS = ("text", "person", "place", "label", "date_from", "date_to", "media", "limit")
 
 
+def _display(a, res):
+    """Ready-to-paste transcript directive; quotes/braces/newlines stripped so the title cannot break the syntax."""
+    if not res["photos"]:
+        return None
+    parts = [str(a[k]) for k in ("text", "person", "place", "label", "date_from", "date_to") if a.get(k)]
+    title = re.sub(r"[^\w\s,.\-]", " ", " ".join(parts))  # allowlist: no quotes, braces, backslashes
+    title = " ".join(title.split())[:60] or "Photos"
+    ids = ",".join(p["uuid"] for p in res["photos"][:200])
+    return f'::lumina-photos{{ids="{ids}" title="{title}"}}'
+
+
 def _search(a):
-    return photos.search(photos.get_db(), **{k: a[k] for k in _SEARCH_KEYS if a.get(k) is not None})
+    res = photos.search(photos.get_db(), **{k: a[k] for k in _SEARCH_KEYS if a.get(k) is not None})
+    if d := _display(a, res):
+        res["display"] = d
+    return res
 
 
 def _album(a):
@@ -57,7 +72,7 @@ _SCHEMAS = {
         "name": "lumina_search",
         "description": "Search the user's Apple Photos library by free text (text found in images, scene labels, titles, keywords, places), "
                        "named person, place, scene label, date range or media type. At least one filter is required. Newest first. "
-                       "Returns photo ids (uuid) and metadata, never file paths.",
+                       "Returns photo ids (uuid) and metadata, never file paths. Results include a `display` line: paste it verbatim on its own line in your answer to show the photos.",
         "parameters": {"type": "object", "properties": {
             "text": {**_STR, "description": "Free text, e.g. 'passport'"},
             "person": {**_STR, "description": "Named person in Photos, e.g. 'Mom'"},
@@ -87,6 +102,10 @@ _HANDLERS = {"lumina_search": _search, "lumina_create_album": _album, "lumina_li
 
 
 def register(ctx):
+    try:  # documented per-plugin data dir; falls back to HERMES_HOME/plugin-data/lumina
+        photos.set_cache_dir(ctx.state.data_dir)
+    except Exception:
+        pass
     for name, fn in _HANDLERS.items():
         ctx.register_tool(
             name=name, toolset="lumina", schema=_SCHEMAS[name], handler=_json(fn),

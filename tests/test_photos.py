@@ -75,7 +75,8 @@ def test_errors_never_leak_paths(monkeypatch, tmp_path):
     assert "/Users" not in e.value.message
 
 
-def test_search_odd_photos_and_detected_text():
+def test_search_odd_photos_and_detected_text(tmp_path, monkeypatch):
+    monkeypatch.setattr(photos, "_cache_dir", tmp_path)
     import datetime as dt
     from types import SimpleNamespace as NS
 
@@ -92,3 +93,29 @@ def test_search_odd_photos_and_detected_text():
     assert [x["uuid"] for x in r["photos"]] == ["P"] and r["photos"][0]["text_snippet"] == "PASSPORT No 123"
     assert photos.search(db, person="x", label="y")["total_matches"] == 0
     assert photos.photo_dict(odd)["labels"] == []
+
+
+def test_ocr_cache(tmp_path):
+    import datetime as dt
+    from types import SimpleNamespace as NS
+
+    photos.set_cache_dir(tmp_path)
+    calls = []
+
+    def ocr():
+        calls.append(1)
+        return [("PASSPORT", 0.9)]
+
+    p = NS(uuid="A", ismovie=False, date_modified=dt.datetime(2024, 1, 1), fingerprint="f", detected_text=ocr)
+    try:
+        assert photos.ocr_text(p) == ["PASSPORT"] and photos.ocr_text(p) == ["PASSPORT"]
+        assert len(calls) == 1  # second call served from sqlite
+        p.date_modified = dt.datetime(2024, 2, 1)  # edited: cache invalidated
+        photos.ocr_text(p)
+        assert len(calls) == 2
+        v = NS(uuid="V", ismovie=True, detected_text=ocr)
+        assert photos.ocr_text(v) == [] and len(calls) == 2  # videos skipped
+        (tmp_path / "ocr.sqlite").write_bytes(b"garbage")  # corrupt cache: log, still answer
+        assert photos.ocr_text(p) == ["PASSPORT"]
+    finally:
+        photos.set_cache_dir(None)
