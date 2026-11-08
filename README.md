@@ -14,6 +14,7 @@ Lumina understands how you remember your photos. You can ask naturally:
 
 - **"Find my passport"** — searches text detected inside documents, ID cards, and receipts using Apple's on-device OCR.
 - **"When does my passport expire?"** / **"What's the Wi-Fi password in my photos?"**: Lumina reads the text inside the photo and answers with just the fact, showing the photo it came from.
+- **"Send my passport to the hotel"** (Safe Send): before an ID leaves your Mac, Lumina's Guardian stops the send, blacks out the number, date of birth and machine-readable lines (hotels still see your name and photo), then **re-reads the copy on-device to prove 0 sensitive items remain** and stamps it. If it cannot prove that, nothing is sent.
 - **"Make a memory of our Goa trip"**: Lumina picks the best 12 photos and makes a 20-second movie with slow zooms and captions. It plays right in Hermes, or arrives on your phone.
 - **"Is anything of mine expiring soon?"**: Lumina reads your photographed passport, cards and memberships and tells you what expires first. Ask Hermes to remind you before the date.
 - **"Photos of Mom at the beach"** — combines recognized family members with scene classifications.
@@ -96,6 +97,7 @@ Lumina connects Apple Photos with Hermes through a full-stack plugin architectur
 - `lumina_library_info`: Checks library status, counts of photos and videos, and top recognized people.
 - `lumina_export`: Sends full photos to messaging channels (like Telegram and WhatsApp) using Hermes `MEDIA:` attachments.
 - `lumina_read_text`: Reads the full on-device OCR text of up to 5 photos so Hermes can answer questions like "when does my passport expire?".
+- `lumina_redact`: Safe Send. Finds sensitive fields with Apple Vision text boxes (presets: hotel, airline, all), draws black bars on a pixel-only copy (no EXIF/GPS), re-runs OCR on the result and refuses to deliver unless 0 sensitive strings remain.
 - `lumina_make_memory`: Renders up to 12 photos into a ~20 s MP4 (Ken Burns zoom, captions) with ffmpeg, or an animated GIF if ffmpeg is not installed. Returned as a `MEDIA:` line, so Hermes Desktop plays it inline and messaging apps deliver it.
 - `lumina_expiry`: Finds expiry dates in the on-device OCR text of document photos and lists them soonest first.
 - `lumina_on_this_day`: Gathers photos taken on today's month and day from earlier years.
@@ -105,6 +107,7 @@ Lumina connects Apple Photos with Hermes through a full-stack plugin architectur
 - `pre_llm_call`: Detects photo-related requests in chat and provides prompt context nudging the agent toward `lumina_search`.
 - `post_tool_call`: Remembers the visual photo grid directive generated during the search.
 - `transform_llm_output`: Automatically appends the photo gallery directive (`::lumina-photos{...}`) if the language model forgets to include it.
+- `pre_tool_call` (Guardian): blocks sending the original of a photographed ID document through `lumina_export` and points Hermes to `lumina_redact` instead, unless you explicitly ask for the original.
 - `pre_tool_call`: Validates album creation requests to protect against empty names or invalid IDs before touching Photos.
 
 ### Desktop UI & Thumbnail API
