@@ -40,4 +40,13 @@ def test_thumbs_validation(monkeypatch, library):
 def test_status_no_library(monkeypatch, tmp_path):
     c, _ = client(monkeypatch, str(tmp_path / "missing.photoslibrary"))
     s = c.get("/api/plugins/lumina/status").json()
-    assert s["access"] == "no_access" and s["error"] == "no_library"
+    assert s["access"] == "error" and s["error"] == "no_library"
+
+
+def test_status_no_access(monkeypatch, library):
+    c, m = client(monkeypatch, library)
+
+    def boom():
+        raise m.photos.LuminaError("no_access", "x")
+    monkeypatch.setattr(m.photos, "get_db", boom)
+    assert c.get("/api/plugins/lumina/status").json()["access"] == "no_access"

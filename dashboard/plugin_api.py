@@ -59,5 +59,5 @@ def status():
     try:
         return {**photos.library_info(photos.get_db()), "access": "ok"}
     except photos.LuminaError as e:
-        return {"access": "no_access", "error": e.code, "message": e.message,
+        return {"access": "no_access" if e.code == "no_access" else "error", "error": e.code, "message": e.message,
                 "photos": 0, "videos": 0, "people": [], "library_path_present": False}
