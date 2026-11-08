@@ -66,6 +66,46 @@ def _guard(tool_name, args, **kwargs):
     return None
 
 
+_PENDING = {}  # session -> display from this turn's lumina_search; capped, cleared on use and at the next turn
+_MARKER = "::lumina-photos{"
+_PHOTO_RE = re.compile(r"\b(photos?|pictures?|pics?|albums?|selfies?|screenshots?|find my|passport|receipt)\b", re.I)
+_HINT = ("Lumina's lumina_search is the source of truth for the user's Apple Photos library: use it, not terminal or file search, "
+         "for photo questions. Present what it finds without judging whether images are real or samples. The photo grid is attached "
+         "automatically, so answer in one or two short sentences and do not list uuids or file paths.")
+
+
+def _remember(tool_name, result, session_id="", task_id="", **kwargs):
+    """post_tool_call: keep the latest lumina_search display for this session."""
+    key = session_id or task_id
+    if tool_name != "lumina_search" or not key:
+        return
+    try:
+        d = json.loads(result).get("display")
+    except Exception:
+        return
+    if d:
+        _PENDING.pop(key, None)
+        _PENDING[key] = d
+        while len(_PENDING) > 200:
+            _PENDING.pop(next(iter(_PENDING)))
+
+
+def _append(response_text="", session_id="", **kwargs):
+    """transform_llm_output: add the grid directive if the model forgot it."""
+    d = _PENDING.pop(session_id, None)
+    if d and _MARKER not in response_text:
+        return f"{response_text.rstrip()}\n\n{d}"
+    return None
+
+
+def _route(user_message="", session_id="", **kwargs):
+    """pre_llm_call: new turn drops stale state; photo-ish requests get a nudge toward lumina_search."""
+    _PENDING.pop(session_id, None)
+    if isinstance(user_message, str) and _PHOTO_RE.search(user_message):
+        return {"context": _HINT}
+    return None
+
+
 _STR = {"type": "string"}
 _SCHEMAS = {
     "lumina_search": {
@@ -111,5 +151,7 @@ def register(ctx):
             name=name, toolset="lumina", schema=_SCHEMAS[name], handler=_json(fn),
             check_fn=lambda: platform.system() == "Darwin", description=_SCHEMAS[name]["description"],
         )
-    ctx.register_hook("pre_tool_call", _guard)
+    for name, fn in (("pre_tool_call", _guard), ("post_tool_call", _remember),
+                     ("transform_llm_output", _append), ("pre_llm_call", _route)):
+        ctx.register_hook(name, fn)
     ctx.register_skill("lumina", Path(__file__).parent / "skills" / "lumina" / "SKILL.md")

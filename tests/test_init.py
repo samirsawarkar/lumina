@@ -68,3 +68,51 @@ def test_search_display_line(monkeypatch):
     assert out["display"] == f'::lumina-photos{{ids="{u}" title="pass port x Goa"}}'
     monkeypatch.setattr(lumina.photos, "search", lambda db, **k: {"count": 0, "total_matches": 0, "photos": []})
     assert "display" not in json.loads(lumina._json(lumina._search)({"text": "x"}))
+
+
+D = '::lumina-photos{ids="A" title="x"}'
+
+
+def _seen(sid="s", task=""):
+    lumina._remember("lumina_search", json.dumps({"display": D}), session_id=sid, task_id=task)
+
+
+def test_append_once_when_missing():
+    lumina._PENDING.clear()
+    _seen()
+    assert lumina._append("Found it.", session_id="s") == f"Found it.\n\n{D}"
+    assert lumina._append("Found it.", session_id="s") is None  # cleared on use
+
+
+def test_append_skipped_when_present_or_unrelated():
+    lumina._PENDING.clear()
+    _seen()
+    assert lumina._append(f"Here\n\n{D}", session_id="s") is None
+    _seen()
+    assert lumina._append("hi", session_id="other") is None
+    lumina._remember("terminal", json.dumps({"display": D}), session_id="t")
+    assert lumina._append("hi", session_id="t") is None
+
+
+def test_remember_falls_back_to_task_id_and_is_bounded():
+    lumina._PENDING.clear()
+    _seen(sid="", task="task1")
+    assert "task1" in lumina._PENDING
+    for i in range(300):
+        _seen(sid=f"s{i}")
+    assert len(lumina._PENDING) == 200
+
+
+def test_new_turn_clears_stale_and_routes_photo_requests():
+    lumina._PENDING.clear()
+    _seen()
+    assert lumina._route("what's the weather", session_id="s") is None
+    assert lumina._append("sunny", session_id="s") is None
+    assert "lumina_search" in lumina._route("Find my passport photo", session_id="s")["context"]
+    assert lumina._route("write a poem", session_id="s") is None
+
+
+def test_hooks_registered():
+    c = Ctx()
+    lumina.register(c)
+    assert {"post_tool_call", "transform_llm_output", "pre_llm_call"} <= set(c.hooks)
