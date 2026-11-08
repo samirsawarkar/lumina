@@ -4,7 +4,7 @@ description: "Ask Hermes about your Apple Photos library: find photos by person,
 author: "Samir Sawkar"
 license: MIT
 platforms: [macos]
-requires_hermes: ">=2026.9"
+requires_hermes: ">=0.23"
 provides_tools:
   - lumina_search
   - lumina_create_album
