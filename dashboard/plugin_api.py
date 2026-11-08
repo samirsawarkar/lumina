@@ -66,7 +66,10 @@ def redact_view(id: str = ""):
     """Before/after for a Safe Send copy. Meta carries no sensitive values; paths are never returned."""
     if not _RID.fullmatch(id):
         return JSONResponse({"error": "bad_args"}, status_code=400)
-    d = photos._data_dir() / "redacted"
+    # The tool runs with Hermes' per-plugin data dir (plugin-data/<install id>); this router does not get it, so look in siblings too.
+    home = photos._data_dir().parent
+    d = next((x.parent for x in [photos._data_dir() / "redacted" / f"{id}.json", *home.glob(f"*/redacted/{id}.json")] if x.exists()),
+             photos._data_dir() / "redacted")
     try:
         meta = json.loads((d / f"{id}.json").read_text())
         from PIL import Image

@@ -79,3 +79,22 @@ def test_redact_endpoint(monkeypatch, library, tmp_path):
     assert j["before"] == "data:image/jpeg;base64,AAAA" and j["after"].startswith("data:image/jpeg;base64,")
     assert {k: j[k] for k in meta if k != "created"} == {k: v for k, v in meta.items() if k != "created"}
     assert set(j) == {"id", "uuid", "document", "preset", "found", "remaining", "verified", "kinds", "before", "after"}
+
+
+def test_redact_view_finds_sibling_data_dir(tmp_path, monkeypatch):
+    import json as _json
+
+    from PIL import Image
+
+    from lumina.dashboard import plugin_api as api
+
+    own, other = tmp_path / "lumina", tmp_path / "agent-plugin-lumina-x" / "redacted"
+    other.mkdir(parents=True)
+    monkeypatch.setattr(api.photos, "_cache_dir", own)
+    rid = "abcdef012345"
+    meta = {"id": rid, "uuid": "u", "document": "Passport", "preset": "hotel", "found": 4, "remaining": 0, "verified": True, "kinds": ["dob"]}
+    (other / f"{rid}.json").write_text(_json.dumps(meta))
+    Image.new("RGB", (10, 10)).save(other / f"{rid}.jpg")
+    monkeypatch.setattr(api, "_db", lambda: type("D", (), {"get_photo": lambda self, u: None})())
+    out = api.redact_view(rid)
+    assert out["found"] == 4 and out["after"].startswith("data:image/jpeg")
