@@ -356,3 +356,38 @@ def test_make_memory_render(library, monkeypatch, tmp_path):
     assert json.loads(bad)["error"] == "bad_args" and str(tmp_path) not in bad
     nf = _call("lumina_make_memory", {"uuids": ["00000000-0000-0000-0000-000000000000"]})
     assert json.loads(nf)["error"] == "not_found" and str(tmp_path) not in nf
+
+
+def test_read_text_unreadable_photo_skipped(library, monkeypatch):
+    from lumina import photos
+
+    monkeypatch.setenv("LUMINA_LIBRARY", library)
+    a, b = sorted((p for p in photos.get_db().photos() if not p.hidden and not p.intrash), key=lambda p: p.uuid)[:2]
+
+    def ocr(p):
+        if p.uuid == a.uuid:
+            raise OSError("boom")
+        return ["ok"]
+    monkeypatch.setattr(photos, "ocr_text", ocr)
+    out = json.loads(_call("lumina_read_text", {"uuids": [a.uuid, b.uuid]}))
+    assert [r["uuid"] for r in out["photos"]] == [b.uuid]
+    assert out["skipped"] == [{"uuid": a.uuid, "reason": "unreadable"}]
+
+
+def test_make_memory_failure_removes_partial(library, monkeypatch, tmp_path):
+    import shutil
+
+    from lumina import photos
+
+    monkeypatch.setenv("LUMINA_LIBRARY", library)
+    u = [p.uuid for p in photos.get_db().photos() if photos._is_local(p) and not p.screenshot][:2]
+    if not u:
+        pytest.skip("no local photos in test library")
+
+    def enc(ff, frames, out):
+        out.write_bytes(b"partial")
+        return False
+    monkeypatch.setattr(photos, "_encode_mp4", enc)
+    monkeypatch.setattr(shutil, "which", lambda *_: "/bin/ffmpeg")
+    assert json.loads(_call("lumina_make_memory", {"uuids": u}))["error"] == "render_failed"
+    assert not list((tmp_path / "memories").glob("*.mp4"))

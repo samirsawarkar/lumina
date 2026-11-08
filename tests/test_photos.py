@@ -186,6 +186,9 @@ from datetime import date
     (["Violation: Expired meter"], None),
     (["Vaccination", "Date: 15 FEB 2023"], None),
     ([], None),
+    (["EXPIRY", "DATE OF BIRTH 01 JAN 1990"], None),
+    (["EXPIRY DATES", "ISSUED 01/2020"], None),
+    (["VALID THRU:", "12/2026"], date(2026, 12, 31)),
 ])
 def test_parse_expiry(lines, want):
     assert photos.parse_expiry(lines) == want
@@ -231,3 +234,14 @@ def test_expiry_scan(monkeypatch):
     r = photos.expiry(db, within_days=100, today=date(2026, 11, 8))
     assert [i["uuid"] for i in r["items"]] == ["C", "B"]
     assert "/" not in json.dumps(r["items"]).replace("\\/", "")
+
+
+def test_pick_no_duplicate_favorite():
+    from types import SimpleNamespace as NS
+
+    ps = [NS(i=i, favorite=(i == 1)) for i in range(24)]
+    got = photos._pick(ps, k=12)
+    assert len({p.i for p in got}) == len(got) == 12
+    ps = [NS(i=i, favorite=(i == 1)) for i in range(5)]
+    got = photos._pick(ps, k=3)  # idx [0,2,4]: 1 is neighbour of both 0 and 2
+    assert len({p.i for p in got}) == 3

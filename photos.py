@@ -356,8 +356,13 @@ def read_text(db, uuids) -> dict:
         if p is None or p.hidden or p.intrash:
             skipped.append({"uuid": u, "reason": "not_found"})
             continue
-        out.append({"uuid": p.uuid, "date": p.date.isoformat() if p.date else None, "title": p.title,
-                    "text": "\n".join(ocr_text(p))[:READ_TEXT_MAX]})
+        try:
+            text = "\n".join(ocr_text(p))[:READ_TEXT_MAX]
+        except Exception:
+            log.warning("ocr failed for %s", u, exc_info=True)
+            skipped.append({"uuid": u, "reason": "unreadable"})
+            continue
+        out.append({"uuid": p.uuid, "date": p.date.isoformat() if p.date else None, "title": p.title, "text": text})
     return {"photos": out, "skipped": skipped}
 
 
@@ -404,12 +409,17 @@ def _dates_in(s):
     return out
 
 
+def _just_date(s):
+    """True if `s` is essentially only a date (at most 2 stray letters once the date and punctuation are removed)."""
+    return len(re.findall(r"[A-Za-z]", _DATE.sub(" ", s))) <= 2
+
+
 def parse_expiry(lines: list[str]) -> dt.date | None:
     """Latest date found after an expiry keyword (same line, else the next line); None if there is none."""
     found = []
     for i, line in enumerate(lines):
         for k in _EXP_KEY.finditer(line):
-            ds = _dates_in(line[k.end():]) or (_dates_in(lines[i + 1]) if i + 1 < len(lines) else [])
+            ds = _dates_in(line[k.end():]) or (_dates_in(lines[i + 1]) if i + 1 < len(lines) and _just_date(lines[i + 1]) else [])
             found += ds
     return max(found) if found else None
 
@@ -468,13 +478,14 @@ def _pick(ps, k=MEM_MAX):
     if n <= k:
         return ps
     idx = [round(j * (n - 1) / (k - 1)) for j in range(k)]
-    out = []
+    out, taken = [], set()
     for i in idx:
         if not ps[i].favorite:
             for j in (i - 1, i + 1):
-                if 0 <= j < n and ps[j].favorite and j not in idx:
+                if 0 <= j < n and ps[j].favorite and j not in idx and j not in taken:
                     i = j
                     break
+        taken.add(i)
         out.append(ps[i])
     return out
 
@@ -586,13 +597,18 @@ def make_memory(db, uuids, title) -> dict:
         name = _uuid.uuid4().hex[:12]
         if gif:
             out = d / f"{name}.gif"
-            ims[0].save(out, save_all=True, append_images=ims[1:], duration=1600, loop=0)
+            try:
+                ims[0].save(out, save_all=True, append_images=ims[1:], duration=1600, loop=0)
+            except Exception:
+                out.unlink(missing_ok=True)
+                raise
             secs = 1.6 * len(ims)
         else:
             for i, im in enumerate(ims):
                 im.save(work / f"f{i:02d}.jpg", quality=92)
             out = d / f"{name}.mp4"
             if not _encode_mp4(shutil.which("ffmpeg"), [work / f"f{i:02d}.jpg" for i in range(len(ims))], out):
+                out.unlink(missing_ok=True)
                 raise LuminaError("render_failed", "Could not render the memory video.")
             secs = len(ims) * (MEM_CLIP - MEM_FADE) + MEM_FADE
     finally:
