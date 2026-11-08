@@ -199,7 +199,7 @@ def search(db, text=None, person=None, place=None, label=None, date_from=None, d
         hits.append(p)
     hits.sort(key=lambda p: p.date.timestamp() if p.date else 0, reverse=True)
     return {"count": min(len(hits), limit), "total_matches": len(hits),
-            "photos": [photo_dict(p) for p in hits[:limit]]}
+            "photos": [photo_dict(p) for p in hits[:limit]], "all_uuids": [p.uuid for p in hits[:200]]}
 
 
 def library_info(db) -> dict:

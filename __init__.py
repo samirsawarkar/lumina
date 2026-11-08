@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import platform
 import re
@@ -29,21 +30,49 @@ def _json(fn):
 _SEARCH_KEYS = ("text", "person", "place", "label", "date_from", "date_to", "media", "limit")
 
 
+def _month(s):
+    return dt.date.fromisoformat(s[:10]).strftime("%b %Y")
+
+
+def _title(a):
+    """Friendly grid title; characters outside the allowlist are stripped so it cannot break the directive."""
+    try:
+        d0, d1 = (a.get("date_from") or "")[:10], (a.get("date_to") or "")[:10]
+        if d0 and d1 and d0[:4] == d1[:4] and d0[5:] == "01-01" and d1[5:] == "12-31":
+            t = f"Photos from {d0[:4]}"
+        elif d0 and d1 and d0[:7] == d1[:7]:
+            t = dt.date.fromisoformat(d0).strftime("%B %Y")
+        elif d0 and d1:
+            t = f"{_month(d0)} \u2013 {_month(d1)}"
+        elif d0:
+            t = f"Since {_month(d0)}"
+        elif d1:
+            t = f"Before {_month(d1)}"
+        else:
+            t = ""
+    except ValueError:
+        t = ""
+    if not t:
+        who = [str(a[k]) for k in ("text", "person") if a.get(k)]
+        t = " \u00b7 ".join(who + [str(a[k]) for k in ("label", "place") if a.get(k)])
+    t = re.sub(r"[^\w\s,.\-\u2013\u00b7]", " ", t)  # allowlist: no quotes, braces, backslashes
+    t = " ".join(t.split())[:60]
+    return t[:1].upper() + t[1:] or "Photos"
+
+
 def _display(a, res):
-    """Ready-to-paste transcript directive; quotes/braces/newlines stripped so the title cannot break the syntax."""
+    """Ready-to-paste transcript directive covering ALL matches (newest first, max 200)."""
     if not res["photos"]:
         return None
-    parts = [str(a[k]) for k in ("text", "person", "place", "label", "date_from", "date_to") if a.get(k)]
-    title = re.sub(r"[^\w\s,.\-]", " ", " ".join(parts))  # allowlist: no quotes, braces, backslashes
-    title = " ".join(title.split())[:60] or "Photos"
-    ids = ",".join(p["uuid"] for p in res["photos"][:200])
-    return f'::lumina-photos{{ids="{ids}" title="{title}"}}'
+    return f'::lumina-photos{{ids="{",".join(res["all_uuids"])}" title="{_title(a)}"}}'
 
 
 def _search(a):
     res = photos.search(photos.get_db(), **{k: a[k] for k in _SEARCH_KEYS if a.get(k) is not None})
+    res.setdefault("all_uuids", [p["uuid"] for p in res["photos"]])
     if d := _display(a, res):
         res["display"] = d
+    res.pop("all_uuids")
     return res
 
 

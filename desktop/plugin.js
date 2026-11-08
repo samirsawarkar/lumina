@@ -77,10 +77,11 @@ function PhotosDirective({ attrs, ctx }) {
 
   const inlineIds = ids.slice(0, 12)
   const inlineKey = inlineIds.join(',')
+  const small = ids.length <= 3
 
   const { data, isLoading } = useQuery({
-    queryKey: ['lumina', 'thumbs', inlineKey],
-    queryFn: () => ctx.rest(`/thumbs?uuids=${inlineKey}&size=s`),
+    queryKey: ['lumina', 'thumbs', inlineKey, small ? 'm' : 's'],
+    queryFn: () => ctx.rest(`/thumbs?uuids=${inlineKey}&size=${small ? 'm' : 's'}`),
     enabled: ids.length > 0
   })
 
@@ -128,7 +129,9 @@ function PhotosDirective({ attrs, ctx }) {
         : jsxs('div', {
             className: 'grid gap-2',
             style: {
-              gridTemplateColumns: 'repeat(auto-fill, minmax(72px, 1fr))'
+              gridTemplateColumns: small
+                ? 'repeat(auto-fill, minmax(160px, 1fr))'
+                : 'repeat(auto-fill, minmax(72px, 1fr))'
             },
             children: [
               ...inlineIds.map((uuid) => {
@@ -141,18 +144,20 @@ function PhotosDirective({ attrs, ctx }) {
                   type: 'button',
                   onClick: () => handleTileClick(uuid),
                   className:
-                    'aspect-square rounded overflow-hidden flex items-center justify-center p-0 transition-opacity hover:opacity-90',
+                    (small ? '' : 'aspect-square ') +
+                    'rounded overflow-hidden flex items-center justify-center p-0 transition-opacity hover:opacity-90',
                   style: {
-                    backgroundColor: 'var(--ui-bg-muted)',
+                    backgroundColor: small ? 'var(--ui-bg-subtle)' : 'var(--ui-bg-muted)',
                     border: '1px solid var(--ui-border-subtle)',
-                    cursor: 'pointer'
+                    cursor: 'pointer',
+                    ...(small ? { height: '220px' } : {})
                   },
                   title: item?.title || dateStr || 'Photo',
                   children: dataUrl
                     ? jsx('img', {
                         src: dataUrl,
                         alt: item?.title || dateStr || 'Photo',
-                        className: 'w-full h-full object-cover'
+                        className: small ? 'w-full h-full object-contain' : 'w-full h-full object-cover'
                       })
                     : jsx('div', {
                         className:
@@ -233,6 +238,13 @@ function LuminaPane({ ctx }) {
     children: jsxs('div', {
       className: 'p-3 flex flex-col gap-3',
       children: [
+        hasPhotos
+          ? jsx('div', {
+              className: 'text-sm font-semibold truncate px-0.5',
+              style: { color: 'var(--ui-text)' },
+              children: `${activeSet?.title || 'Photos'} \u00b7 ${ids.length}`
+            })
+          : null,
         status
           ? jsxs('div', {
               className: 'flex flex-col gap-2 p-2.5 rounded',
@@ -284,21 +296,6 @@ function LuminaPane({ ctx }) {
           ? jsxs('div', {
               className: 'flex flex-col gap-2',
               children: [
-                jsxs('div', {
-                  className: 'flex items-center justify-between px-0.5',
-                  children: [
-                    jsx('div', {
-                      className: 'text-xs font-semibold truncate',
-                      style: { color: 'var(--ui-text)' },
-                      children: activeSet?.title || 'Photos'
-                    }),
-                    jsx('div', {
-                      className: 'text-xs',
-                      style: { color: 'var(--ui-text-tertiary)' },
-                      children: `${ids.length} photos`
-                    })
-                  ]
-                }),
                 isThumbsLoading
                   ? jsx('div', {
                       className: 'flex items-center justify-center p-6',
