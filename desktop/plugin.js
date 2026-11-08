@@ -61,14 +61,12 @@ function formatTileDate(dateStr) {
 
 function PhotosDirective({ attrs, ctx }) {
   const validated = validatePhotoAttrs(attrs)
-  if (!validated) {
-    return null
-  }
-
-  const { ids, title } = validated
+  const ids = validated ? validated.ids : []
+  const title = validated ? validated.title : ''
   const idsKey = ids.join(',')
 
   useEffect(() => {
+    if (!validated) return
     const current = $activePhotoSet.get()
     if (!current || current.ids.join(',') !== idsKey) {
       $activePhotoSet.set({ ids, title })
@@ -84,6 +82,10 @@ function PhotosDirective({ attrs, ctx }) {
     queryFn: () => ctx.rest(`/thumbs?uuids=${inlineKey}&size=${small ? 'm' : 's'}`),
     enabled: ids.length > 0
   })
+
+  if (!validated) {
+    return null
+  }
 
   const remainingCount = ids.length - 12
   const hasMore = remainingCount > 0
