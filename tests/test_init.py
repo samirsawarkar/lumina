@@ -57,3 +57,14 @@ def test_no_library_and_no_access(monkeypatch, tmp_path):
         raise PermissionError("Operation not permitted")
     monkeypatch.setattr(lumina.photos, "get_db", boom)
     assert json.loads(lumina._json(h)({"text": "x"}))["error"] == "no_access"
+
+
+def test_search_display_line(monkeypatch):
+    u = "0A1B2C3D-0000-1111-2222-333344445555"
+    res = {"count": 1, "total_matches": 1, "photos": [{"uuid": u}]}
+    monkeypatch.setattr(lumina.photos, "get_db", lambda: None)
+    monkeypatch.setattr(lumina.photos, "search", lambda db, **k: res if k else None)
+    out = json.loads(lumina._json(lumina._search)({"text": 'pass"port} {x\n', "place": "Goa"}))
+    assert out["display"] == f'::lumina-photos{{ids="{u}" title="pass port x Goa"}}'
+    monkeypatch.setattr(lumina.photos, "search", lambda db, **k: {"count": 0, "total_matches": 0, "photos": []})
+    assert "display" not in json.loads(lumina._json(lumina._search)({"text": "x"}))
