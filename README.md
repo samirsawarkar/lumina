@@ -14,6 +14,8 @@ Lumina understands how you remember your photos. You can ask naturally:
 
 - **"Find my passport"** — searches text detected inside documents, ID cards, and receipts using Apple's on-device OCR.
 - **"When does my passport expire?"** / **"What's the Wi-Fi password in my photos?"**: Lumina reads the text inside the photo and answers with just the fact, showing the photo it came from.
+- **"Make a memory of our Goa trip"**: Lumina picks the best 12 photos and makes a 20-second movie with slow zooms and captions. It plays right in Hermes, or arrives on your phone.
+- **"Is anything of mine expiring soon?"**: Lumina reads your photographed passport, cards and memberships and tells you what expires first. Ask Hermes to remind you before the date.
 - **"Photos of Mom at the beach"** — combines recognized family members with scene classifications.
 - **"Make an album of our Goa trip"** — finds photos from your holiday and creates a ready-to-share album in Apple Photos.
 - **"Send me my passport photo" (from your phone)** — message Hermes while on the go via Telegram or WhatsApp and get the photo sent directly to your chat.
@@ -94,6 +96,8 @@ Lumina connects Apple Photos with Hermes through a full-stack plugin architectur
 - `lumina_library_info`: Checks library status, counts of photos and videos, and top recognized people.
 - `lumina_export`: Sends full photos to messaging channels (like Telegram and WhatsApp) using Hermes `MEDIA:` attachments.
 - `lumina_read_text`: Reads the full on-device OCR text of up to 5 photos so Hermes can answer questions like "when does my passport expire?".
+- `lumina_make_memory`: Renders up to 12 photos into a ~20 s MP4 (Ken Burns zoom, captions) with ffmpeg, or an animated GIF if ffmpeg is not installed. Returned as a `MEDIA:` line, so Hermes Desktop plays it inline and messaging apps deliver it.
+- `lumina_expiry`: Finds expiry dates in the on-device OCR text of document photos and lists them soonest first.
 - `lumina_on_this_day`: Gathers photos taken on today's month and day from earlier years.
 
 ### Lifecycle Hooks
@@ -115,6 +119,7 @@ Lumina connects Apple Photos with Hermes through a full-stack plugin architectur
 
 - **Operating System:** macOS (tested on macOS 26 on Apple Silicon).
 - **Hermes Agent:** Hermes >= 0.23.
+- **Optional:** `ffmpeg` (`brew install ffmpeg`) for MP4 memory videos; without it Lumina makes an animated GIF.
 - **Apple Photos:** the library Photos last opened. To use a different one, set `LUMINA_LIBRARY` to its `.photoslibrary` path.
 
 ---
