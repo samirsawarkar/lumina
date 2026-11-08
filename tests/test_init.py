@@ -204,7 +204,8 @@ def test_on_this_day(library, monkeypatch):
     from lumina import photos
 
     db = photos.get_db()
-    p = next(p for p in db.photos() if p.date)
+    # Deterministic pick of a photo search can return (search skips hidden ones).
+    p = sorted((p for p in db.photos() if p.date and not p.hidden), key=lambda p: p.uuid)[0]
     d = p.date.date().replace(year=p.date.year + 1) if not (p.date.month == 2 and p.date.day == 29) else None
     out = json.loads(_call("lumina_on_this_day", {"date": d.isoformat()}))
     assert p.uuid in [x["uuid"] for x in out["photos"]] or out["total_matches"] > 24
