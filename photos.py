@@ -172,7 +172,7 @@ def search(db, text=None, person=None, place=None, label=None, date_from=None, d
     except (TypeError, ValueError):
         raise LuminaError("bad_args", "limit must be an integer.") from None
     d0, d1 = (_day(date_from) if date_from else None), (_day(date_to) if date_to else None)
-    low = lambda s: (s or "").lower()  # noqa: E731
+    low = lambda s: (s or "").lower().replace("-", "")  # noqa: E731  (wifi == Wi-Fi)
     md = {(on_day.month, on_day.day)} if on_day else set()
     if on_day and md == {(2, 28)} and not calendar.isleap(on_day.year):
         md.add((2, 29))  # leap-day photos surface on Feb 28 in common years
@@ -341,3 +341,21 @@ def export(db, uuids) -> dict:
         else:
             skipped.append({"uuid": u, "reason": "no local file (stored in iCloud) or a video"})
     return {"exported": len(media), "media": media, "skipped": skipped}
+
+
+READ_TEXT_MAX = 4000
+
+
+def read_text(db, uuids) -> dict:
+    """Full OCR text (capped) for up to 5 photos; hidden / missing ids go to `skipped`. No file paths."""
+    if not isinstance(uuids, list) or not 0 < len(uuids) <= 5 or not all(isinstance(u, str) and UUID_RE.fullmatch(u) for u in uuids):
+        raise LuminaError("bad_args", "uuids must be a list of 1 to 5 photo ids from lumina_search.")
+    out, skipped = [], []
+    for u in dict.fromkeys(uuids):
+        p = db.get_photo(u)
+        if p is None or p.hidden or p.intrash:
+            skipped.append({"uuid": u, "reason": "not_found"})
+            continue
+        out.append({"uuid": p.uuid, "date": p.date.isoformat() if p.date else None, "title": p.title,
+                    "text": "\n".join(ocr_text(p))[:READ_TEXT_MAX]})
+    return {"photos": out, "skipped": skipped}

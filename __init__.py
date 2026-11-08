@@ -90,6 +90,14 @@ def _export(a):
     return photos.export(photos.get_db(), a.get("uuids"))
 
 
+def _read_text(a):
+    res = photos.read_text(photos.get_db(), a.get("uuids"))
+    if res["photos"]:
+        t = _title({"text": next((p["title"] for p in res["photos"] if p["title"]), "Text from photo")})
+        res["display"] = f'::lumina-photos{{ids="{",".join(p["uuid"] for p in res["photos"])}" title="{t}"}}'
+    return res
+
+
 def _album(a):
     photos.get_db()  # surfaces no_access / no_library before touching Photos
     return photos.create_album(a.get("name"), a.get("uuids"))
@@ -106,6 +114,11 @@ def _guard(tool_name, args, **kwargs):
         if not isinstance(u, list) or not 0 < len(u) <= 10 or not all(isinstance(x, str) and photos.UUID_RE.fullmatch(x) for x in u):
             return {"action": "block", "message": "lumina_export needs 1-10 photo uuids from a previous lumina_search."}
         return None
+    if tool_name == "lumina_read_text":
+        u = (args or {}).get("uuids")
+        if not isinstance(u, list) or not 0 < len(u) <= 5 or not all(isinstance(x, str) and photos.UUID_RE.fullmatch(x) for x in u):
+            return {"action": "block", "message": "lumina_read_text needs 1-5 photo uuids from a previous lumina_search."}
+        return None
     if tool_name != "lumina_create_album":
         return None
     u = (args or {}).get("uuids")
@@ -117,6 +130,8 @@ def _guard(tool_name, args, **kwargs):
 _PENDING = {}  # session -> display from this turn's lumina_search; capped, cleared on use and at the next turn
 _MARKER = "::lumina-photos{"
 _PHOTO_RE = re.compile(r"\b(photos?|pictures?|pics?|albums?|selfies?|screenshots?|find my|passport|receipt)\b", re.I)
+_ASK_RE = re.compile(r"\b(when (does|is)|what'?s my|what is my|how much|number|password|expir\w*|total|code|pin)\b", re.I)
+_DOC_RE = re.compile(r"\b(passport|receipt|bill|ticket|card|wi-?fi|licen[cs]e)\b", re.I)
 _SEND_RE = re.compile(r"\b(send|share|text|message|forward|whatsapp|telegram)\b", re.I)
 _LOCAL_SURFACES = {"", "cli", "tui", "desktop", "local"}  # Hermes agent.platform values with an in-app photo grid
 
@@ -125,6 +140,9 @@ def _messaging(platform):
     return (platform or "").lower() not in _LOCAL_SURFACES
 
 
+_ASK_HINT = ("The answer may be written inside one of the user's photos. Call lumina_search with a `text` filter for the document "
+             "(e.g. 'passport', 'wi-fi', 'total'), then lumina_read_text with the best 1-3 uuids, and answer with the fact in one short "
+             "sentence. Do not list uuids.")
 _SEND_HINT = ("The user is on a messaging platform and wants photos sent. Call lumina_search, then lumina_export with the chosen uuids "
               "(max 10) and put each returned MEDIA:<path> line on its own line in your reply so the image is delivered. "
               "Do not paste the ::lumina-photos directive here.")
@@ -136,7 +154,7 @@ _HINT = ("Lumina's lumina_search is the source of truth for the user's Apple Pho
 def _remember(tool_name, result, session_id="", **kwargs):
     """post_tool_call: keep the latest lumina_search display for this session."""
     key = session_id  # transform_llm_output / pre_llm_call only receive session_id
-    if tool_name not in ("lumina_search", "lumina_on_this_day") or not key:
+    if tool_name not in ("lumina_search", "lumina_on_this_day", "lumina_read_text") or not key:
         return
     try:
         d = json.loads(result).get("display")
@@ -160,6 +178,8 @@ def _append(response_text="", session_id="", platform="", **kwargs):
 def _route(user_message="", session_id="", platform="", **kwargs):
     """pre_llm_call: new turn drops stale state; photo-ish requests get a nudge toward lumina_search."""
     _PENDING.pop(session_id, None)
+    if isinstance(user_message, str) and _ASK_RE.search(user_message) and (_PHOTO_RE.search(user_message) or _DOC_RE.search(user_message)):
+        return {"context": _HINT + " " + _ASK_HINT}
     if isinstance(user_message, str) and _PHOTO_RE.search(user_message):
         return {"context": _HINT + (" " + _SEND_HINT if _messaging(platform) and _SEND_RE.search(user_message) else "")}
     return None
@@ -209,6 +229,15 @@ _SCHEMAS = {
             "uuids": {"type": "array", "items": _STR, "minItems": 1, "maxItems": 10},
         }},
     },
+    "lumina_read_text": {
+        "name": "lumina_read_text",
+        "description": "Read the full text written inside up to 5 photos (uuids from lumina_search). Use after lumina_search when the user asks "
+                       "for a fact written in a photo (dates, numbers, passwords, totals). Answer with just the fact in one short sentence. "
+                       "The `display` line is added to your answer automatically.",
+        "parameters": {"type": "object", "required": ["uuids"], "properties": {
+            "uuids": {"type": "array", "items": _STR, "minItems": 1, "maxItems": 5},
+        }},
+    },
     "lumina_library_info": {
         "name": "lumina_library_info",
         "description": "Photo and video counts, top named people, and whether Lumina can read the library. Use for onboarding or permission checks.",
@@ -216,7 +245,8 @@ _SCHEMAS = {
     },
 }
 _HANDLERS = {"lumina_search": _search, "lumina_create_album": _album, "lumina_library_info": _info,
-             "lumina_on_this_day": _on_this_day, "lumina_export": _export}
+             "lumina_on_this_day": _on_this_day, "lumina_export": _export,
+             "lumina_read_text": _read_text}
 
 
 def register(ctx):

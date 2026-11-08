@@ -13,6 +13,7 @@ Search people, places, scenes, and text inside your Apple Photos library right f
 Lumina understands how you remember your photos. You can ask naturally:
 
 - **"Find my passport"** — searches text detected inside documents, ID cards, and receipts using Apple's on-device OCR.
+- **"When does my passport expire?"** / **"What's the Wi-Fi password in my photos?"**: Lumina reads the text inside the photo and answers with just the fact, showing the photo it came from.
 - **"Photos of Mom at the beach"** — combines recognized family members with scene classifications.
 - **"Make an album of our Goa trip"** — finds photos from your holiday and creates a ready-to-share album in Apple Photos.
 - **"Send me my passport photo" (from your phone)** — message Hermes while on the go via Telegram or WhatsApp and get the photo sent directly to your chat.
@@ -36,7 +37,7 @@ Your photos are deeply personal. Lumina is built with a strict privacy architect
 
 We believe in complete transparency:
 
-- **What your chosen AI model sees:** When Hermes searches your library, it receives the photo metadata needed to answer your request — dates, place names, recognized people names, scene labels, and short snippets of detected text (up to 80 characters).
+- **What your chosen AI model sees:** When Hermes searches your library, it receives the photo metadata needed to answer your request — dates, place names, recognized people names, scene labels, and short snippets of detected text (up to 80 characters). When you ask a question about a photo ("when does my passport expire?"), the full text of that photo (at most 5 photos) is sent so the model can answer.
 - **What your chosen AI model never sees:** the images themselves and deleted or hidden photos. When you ask to send a photo to your phone, the model only handles the attachment line for the exported copy, not the image.
 
 ---
@@ -92,6 +93,7 @@ Lumina connects Apple Photos with Hermes through a full-stack plugin architectur
 - `lumina_create_album`: Automates Apple Photos to create or update albums using photo IDs from previous searches.
 - `lumina_library_info`: Checks library status, counts of photos and videos, and top recognized people.
 - `lumina_export`: Sends full photos to messaging channels (like Telegram and WhatsApp) using Hermes `MEDIA:` attachments.
+- `lumina_read_text`: Reads the full on-device OCR text of up to 5 photos so Hermes can answer questions like "when does my passport expire?".
 - `lumina_on_this_day`: Gathers photos taken on today's month and day from earlier years.
 
 ### Lifecycle Hooks

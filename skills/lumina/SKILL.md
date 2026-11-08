@@ -16,5 +16,6 @@ Use when the user asks about their photos ("find my passport", "photos of Mom at
 6. "On this day" / memories: call `lumina_on_this_day` (optional ISO `date`, default today) and paste its `display` like a search result; mention the `by_year` counts.
 7. On a messaging platform (Telegram, WhatsApp, ...) the grid cannot render. To send photos ("send me my passport photo"), call `lumina_search`, then `lumina_export` with up to 10 uuids, and put each `media` line (`MEDIA:/...jpg`) on its own line in the reply, with no other text on that line. Do not paste the `::lumina-photos` directive there. Photos only in iCloud are reported in `skipped`; tell the user.
 8. Scheduling: users can ask Hermes itself ("every morning at 9, send me my On this day photos") and Hermes creates the scheduled job; that job should call `lumina_on_this_day` then `lumina_export`. The plugin has no scheduler of its own.
+9. Questions answered by a photo ("when does my passport expire?", "what's my Wi-Fi password?"): `lumina_search` with `text` for the document, then `lumina_read_text` with the best 1-3 uuids, and answer with just the fact in one short sentence. Its `display` is appended automatically; do not list uuids.
 
 Lumina is read-only apart from creating albums. It cannot delete photos.

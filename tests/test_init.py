@@ -24,7 +24,7 @@ class Ctx:
 def test_register():
     c = Ctx()
     lumina.register(c)
-    assert set(c.tools) == {"lumina_search", "lumina_create_album", "lumina_library_info", "lumina_on_this_day", "lumina_export"}
+    assert set(c.tools) == {"lumina_search", "lumina_create_album", "lumina_library_info", "lumina_on_this_day", "lumina_export", "lumina_read_text"}
     assert "lumina_delete" not in c.tools and "lumina" in c.skills and "pre_tool_call" in c.hooks
     for name, (schema, _) in c.tools.items():
         assert schema["name"] == name and schema["parameters"]["type"] == "object"
@@ -215,3 +215,52 @@ def test_on_this_day(library, monkeypatch):
     same = json.loads(_call("lumina_on_this_day", {"date": p.date.date().isoformat()}))
     assert p.uuid not in [x["uuid"] for x in same["photos"]]
     assert json.loads(_call("lumina_on_this_day", {"date": "nope"}))["error"] == "bad_args"
+
+
+def test_read_text_register_guard_route():
+    c = Ctx()
+    lumina.register(c)
+    assert "lumina_read_text" in c.tools
+    g = lumina._guard
+    for bad in (None, [], [UU] * 6, ["nope"], [UU, 5], "x"):
+        assert g("lumina_read_text", {"uuids": bad})["action"] == "block"
+    assert g("lumina_read_text", {"uuids": [UU] * 5}) is None and g("lumina_read_text", {"uuids": [UU]}) is None
+    for q in ("When does my passport expire?", "what's my wifi password", "How much was the restaurant bill?"):
+        assert "lumina_read_text" in lumina._route(user_message=q, session_id="s")["context"]
+    for q in ("what is the capital of France", "what's the weather"):
+        assert lumina._route(user_message=q, session_id="s") is None
+    assert "lumina_read_text" not in lumina._route(user_message="Find my photos", session_id="s")["context"]
+
+
+def test_read_text_against_library(library, monkeypatch):
+    from lumina import photos
+
+    monkeypatch.setenv("LUMINA_LIBRARY", library)
+    p = sorted((p for p in photos.get_db().photos() if not p.hidden and not p.intrash), key=lambda p: p.uuid)[0]
+    monkeypatch.setattr(photos, "ocr_text", lambda q: ["Expiry: 01 JAN 2034", "x" * 5000])
+    raw = _call("lumina_read_text", {"uuids": [p.uuid, "00000000-0000-0000-0000-000000000000"]})
+    out = json.loads(raw)
+    [r] = out["photos"]
+    assert r["uuid"] == p.uuid and r["text"].startswith("Expiry: 01 JAN 2034\n") and len(r["text"]) == 4000
+    assert out["skipped"] == [{"uuid": "00000000-0000-0000-0000-000000000000", "reason": "not_found"}]
+    assert out["display"] == f'::lumina-photos{{ids="{p.uuid}" title="{lumina._title({"text": p.title}) if p.title else "Text from photo"}"}}'
+    assert "path" not in raw and library not in raw
+    monkeypatch.setattr(photos, "ocr_text", lambda q: [])
+    assert json.loads(_call("lumina_read_text", {"uuids": [p.uuid]}))["photos"][0]["text"] == ""
+    assert json.loads(_call("lumina_read_text", {"uuids": ["bad"]}))["error"] == "bad_args"
+
+
+def test_remember_stores_read_text_display():
+    lumina._PENDING.clear()
+    _seen()
+    lumina._remember("lumina_read_text", json.dumps({"display": D.replace("A", "B")}), session_id="s")
+    assert lumina._append("It expires 2034.", session_id="s") == f"It expires 2034.\n\n{D.replace('A', 'B')}"
+
+
+def test_text_search_ignores_hyphens(library, monkeypatch):
+    from lumina import photos
+
+    monkeypatch.setenv("LUMINA_LIBRARY", library)
+    monkeypatch.setattr(photos, "ocr_text", lambda q: ["WI-FI password: blue-mango"])
+    assert json.loads(_call("lumina_search", {"text": "wifi"}))["total_matches"] > 0
+    assert json.loads(_call("lumina_search", {"text": "zz-no-such-text"}))["total_matches"] == 0
