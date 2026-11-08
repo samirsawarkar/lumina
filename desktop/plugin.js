@@ -110,14 +110,14 @@ function PhotosDirective({ attrs, ctx }) {
   return jsxs('div', {
     className: 'flex flex-col gap-2 my-2 p-2 rounded-lg',
     style: {
-      backgroundColor: 'var(--ui-bg-subtle)',
-      border: '1px solid var(--ui-border)'
+      backgroundColor: 'var(--ui-bg-secondary)',
+      border: '1px solid var(--ui-stroke-secondary)'
     },
     children: [
       title
         ? jsx('div', {
             className: 'text-sm font-medium px-1',
-            style: { color: 'var(--ui-text)' },
+            style: { color: 'var(--ui-text-primary)' },
             children: title
           })
         : null,
@@ -147,8 +147,8 @@ function PhotosDirective({ attrs, ctx }) {
                     (small ? '' : 'aspect-square ') +
                     'rounded overflow-hidden flex items-center justify-center p-0 transition-opacity hover:opacity-90',
                   style: {
-                    backgroundColor: small ? 'var(--ui-bg-subtle)' : 'var(--ui-bg-muted)',
-                    border: '1px solid var(--ui-border-subtle)',
+                    backgroundColor: small ? 'var(--ui-bg-secondary)' : 'var(--ui-bg-tertiary)',
+                    border: '1px solid var(--ui-stroke-tertiary)',
                     cursor: 'pointer',
                     ...(small ? { height: '220px' } : {})
                   },
@@ -163,7 +163,7 @@ function PhotosDirective({ attrs, ctx }) {
                         className:
                           'w-full h-full flex items-center justify-center p-1 text-center select-none',
                         style: {
-                          backgroundColor: 'var(--ui-bg-muted)',
+                          backgroundColor: 'var(--ui-bg-tertiary)',
                           color: 'var(--ui-text-secondary)'
                         },
                         children: jsx('span', {
@@ -181,9 +181,9 @@ function PhotosDirective({ attrs, ctx }) {
                     className:
                       'aspect-square h-auto w-full flex flex-col items-center justify-center p-1 font-semibold text-xs',
                     style: {
-                      backgroundColor: 'var(--ui-bg)',
-                      borderColor: 'var(--ui-border)',
-                      color: 'var(--ui-text)'
+                      backgroundColor: 'var(--ui-bg-primary)',
+                      borderColor: 'var(--ui-stroke-secondary)',
+                      color: 'var(--ui-text-primary)'
                     },
                     children: `+${remainingCount} more`
                   })
@@ -241,7 +241,7 @@ function LuminaPane({ ctx }) {
         hasPhotos
           ? jsx('div', {
               className: 'text-sm font-semibold truncate px-0.5',
-              style: { color: 'var(--ui-text)' },
+              style: { color: 'var(--ui-text-primary)' },
               children: `${activeSet?.title || 'Photos'} \u00b7 ${ids.length}`
             })
           : null,
@@ -249,14 +249,14 @@ function LuminaPane({ ctx }) {
           ? jsxs('div', {
               className: 'flex flex-col gap-2 p-2.5 rounded',
               style: {
-                backgroundColor: 'var(--ui-bg-subtle)',
-                border: '1px solid var(--ui-border)'
+                backgroundColor: 'var(--ui-bg-secondary)',
+                border: '1px solid var(--ui-stroke-secondary)'
               },
               children: [
                 typeof status.photos === 'number'
                   ? jsx('div', {
                       className: 'text-xs font-medium',
-                      style: { color: 'var(--ui-text)' },
+                      style: { color: 'var(--ui-text-primary)' },
                       children: `${status.photos} photos in library`
                     })
                   : null,
@@ -264,14 +264,14 @@ function LuminaPane({ ctx }) {
                   ? jsxs('div', {
                       className: 'flex flex-col gap-1 mt-1 p-2 rounded text-xs',
                       style: {
-                        backgroundColor: 'var(--ui-bg-muted)',
-                        border: '1px solid var(--ui-border-subtle)',
-                        color: 'var(--ui-text)'
+                        backgroundColor: 'var(--ui-bg-tertiary)',
+                        border: '1px solid var(--ui-stroke-tertiary)',
+                        color: 'var(--ui-text-primary)'
                       },
                       children: [
                         jsx('div', {
                           className: 'font-semibold',
-                          style: { color: 'var(--ui-text)' },
+                          style: { color: 'var(--ui-text-primary)' },
                           children: 'Full Disk Access Required'
                         }),
                         jsx('div', {
@@ -315,8 +315,8 @@ function LuminaPane({ ctx }) {
                           className:
                             'aspect-square rounded overflow-hidden flex items-center justify-center p-0 transition-opacity hover:opacity-90',
                           style: {
-                            backgroundColor: 'var(--ui-bg-muted)',
-                            border: '1px solid var(--ui-border-subtle)',
+                            backgroundColor: 'var(--ui-bg-tertiary)',
+                            border: '1px solid var(--ui-stroke-tertiary)',
                             cursor: 'pointer'
                           },
                           title: item?.title || dateStr || 'Photo',
@@ -330,7 +330,7 @@ function LuminaPane({ ctx }) {
                                 className:
                                   'w-full h-full flex items-center justify-center p-2 text-center select-none',
                                 style: {
-                                  backgroundColor: 'var(--ui-bg-muted)',
+                                  backgroundColor: 'var(--ui-bg-tertiary)',
                                   color: 'var(--ui-text-secondary)'
                                 },
                                 children: jsx('span', {
