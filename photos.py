@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import datetime as dt
 import io
+import logging
 import os
 import threading
 from pathlib import Path
@@ -13,6 +14,9 @@ NO_ACCESS_MSG = (
     "Lumina cannot read the Photos library. Open System Settings > Privacy & Security > "
     "Full Disk Access, enable Hermes (or the terminal app running it), then restart it."
 )
+
+log = logging.getLogger(__name__)
+PHOTOS_ERR_MSG = "Apple Photos could not complete that request. Check that Photos is available and try again."
 
 
 class LuminaError(Exception):
@@ -51,14 +55,17 @@ def get_db():
             if _db is None or stamp != _stamp:
                 _db, _stamp = osxphotos.PhotosDB(dbfile=str(path)), stamp
             return _db
-    except PermissionError:
-        raise LuminaError("no_access", NO_ACCESS_MSG) from None
+    except FileNotFoundError:
+        raise LuminaError("no_library", "No Apple Photos library found.") from None
+    except Exception as e:
+        raise _classify(e) from None
 
 
 def _classify(exc: Exception) -> LuminaError:
     if isinstance(exc, PermissionError) or "Operation not permitted" in str(exc):
         return LuminaError("no_access", NO_ACCESS_MSG)
-    return LuminaError("photos_app_error", str(exc))
+    log.warning("Photos access failed", exc_info=exc)
+    return LuminaError("photos_app_error", PHOTOS_ERR_MSG)
 
 
 # ---- search ----
@@ -169,7 +176,7 @@ def create_album(name: str, uuids: list[str]) -> dict:
         album = lib.album(name) if name in lib.album_names() else lib.create_album(name)
         album.add([photoscript.Photo(u) for u in uuids])
     except Exception as e:  # AppleScript errors are untyped
-        raise LuminaError("photos_app_error", f"Apple Photos refused the request: {e}") from None
+        raise _classify(e) from None
     return {"album": name, "added": len(uuids)}
 
 
@@ -179,7 +186,8 @@ def open_photo(uuid: str) -> None:
     try:
         photoscript.Photo(uuid).spotlight()
     except Exception as e:
-        raise LuminaError("not_found", f"Could not show that photo in Photos: {e}") from None
+        log.warning("open_photo failed", exc_info=e)
+        raise LuminaError("not_found", "Could not show that photo in Photos.") from None
 
 
 # ---- thumbnails ----

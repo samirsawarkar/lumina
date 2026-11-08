@@ -53,3 +53,24 @@ def test_thumbnail_data_url(db):
     # only photos with a local file can yield a thumbnail; fixtures are tiny so this may be None-only
     urls = [photos.thumb_data_url(p, "s") for p in db.photos()]
     assert all(u is None or u.startswith("data:image/jpeg;base64,") for u in urls)
+
+
+def test_errors_never_leak_paths(monkeypatch, tmp_path):
+    assert "/Users" not in photos._classify(RuntimeError("bad /Users/x/Photos.sqlite")).message
+    lib = tmp_path / "L.photoslibrary"
+    lib.mkdir()
+    monkeypatch.setenv("LUMINA_LIBRARY", str(lib))  # exists, but no database/Photos.sqlite
+    with pytest.raises(photos.LuminaError) as e:
+        photos.get_db()
+    assert e.value.code == "no_library" and str(tmp_path) not in e.value.message
+
+    import sys
+    import types
+
+    class Lib:
+        def album_names(self):
+            raise RuntimeError("boom /Users/x/secret")
+    monkeypatch.setitem(sys.modules, "photoscript", types.SimpleNamespace(PhotosLibrary=Lib))
+    with pytest.raises(photos.LuminaError) as e:
+        photos.create_album("a", ["U"])
+    assert "/Users" not in e.value.message
