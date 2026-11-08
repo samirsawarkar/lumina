@@ -260,7 +260,13 @@ function LuminaPane({ ctx }) {
                         })
                       ]
                     })
-                  : null
+                  : status.access === 'error'
+                    ? jsx('div', {
+                        className: 'text-xs mt-1',
+                        style: { color: 'var(--ui-text-secondary)' },
+                        children: status.message || 'Lumina cannot read the Photos library.'
+                      })
+                    : null
               ].filter(Boolean)
             })
           : null,
