@@ -86,6 +86,22 @@ def _on_this_day(a):
     return res
 
 
+def _expiry(a):
+    w, t = a.get("within_days"), a.get("today")
+    try:
+        if w is not None and (isinstance(w, bool) or not 1 <= int(w) <= 3650):
+            raise ValueError
+        w = int(w) if w is not None else None
+        t = dt.date.fromisoformat(t) if t else None
+    except (TypeError, ValueError):
+        raise photos.LuminaError("bad_args", "within_days must be 1-3650 and today an ISO date.") from None
+    res = photos.expiry(photos.get_db(), within_days=w, today=t)
+    if res["items"]:
+        res["display"] = _display(a, {"photos": res["items"], "all_uuids": res["all_uuids"]}, "Expiry radar")
+    res.pop("all_uuids")
+    return res
+
+
 def _export(a):
     return photos.export(photos.get_db(), a.get("uuids"))
 
@@ -131,6 +147,8 @@ _PENDING = {}  # session -> display from this turn's lumina_search; capped, clea
 _MARKER = "::lumina-photos{"
 _PHOTO_RE = re.compile(r"\b(photos?|pictures?|pics?|albums?|selfies?|screenshots?|find my|passport|receipt)\b", re.I)
 _ASK_RE = re.compile(r"\b(when (does|is)|what'?s my|what is my|how much|number|password|expir\w*|total|code|pin)\b", re.I)
+_EXPIRY_RE = re.compile(r"\b(expir\w*|renew\w*|valid (until|thru|through)|out of date|run out)\b", re.I)
+_EXPIRY_OF_RE = re.compile(r"\b(passport|licen[cs]e|card|membership|documents?|id|visa|insurance|anything|my|mine)\b", re.I)
 _DOC_RE = re.compile(r"\b(passport|receipt|bill|ticket|card|wi-?fi|licen[cs]e)\b", re.I)
 _SEND_RE = re.compile(r"\b(send|share|text|message|forward|whatsapp|telegram)\b", re.I)
 _LOCAL_SURFACES = {"", "cli", "tui", "desktop", "local"}  # Hermes agent.platform values with an in-app photo grid
@@ -143,6 +161,8 @@ def _messaging(platform):
 _ASK_HINT = ("The answer may be written inside one of the user's photos. Call lumina_search with a `text` filter for the document "
              "(e.g. 'passport', 'wi-fi', 'total'), then lumina_read_text with the best 1-3 uuids, and answer with the fact in one short "
              "sentence. Do not list uuids.")
+_EXPIRY_HINT = ("Call lumina_expiry (no filters needed) and lead with anything expired or expiring soon, with days left, then a short "
+                "list of the rest. The photo grid is attached automatically; do not list uuids.")
 _SEND_HINT = ("The user is on a messaging platform and wants photos sent. Call lumina_search, then lumina_export with the chosen uuids "
               "(max 10) and put each returned MEDIA:<path> line on its own line in your reply so the image is delivered. "
               "Do not paste the ::lumina-photos directive here.")
@@ -154,7 +174,7 @@ _HINT = ("Lumina's lumina_search is the source of truth for the user's Apple Pho
 def _remember(tool_name, result, session_id="", **kwargs):
     """post_tool_call: keep the latest lumina_search display for this session."""
     key = session_id  # transform_llm_output / pre_llm_call only receive session_id
-    if tool_name not in ("lumina_search", "lumina_on_this_day", "lumina_read_text") or not key:
+    if tool_name not in ("lumina_search", "lumina_on_this_day", "lumina_read_text", "lumina_expiry") or not key:
         return
     try:
         d = json.loads(result).get("display")
@@ -178,6 +198,9 @@ def _append(response_text="", session_id="", platform="", **kwargs):
 def _route(user_message="", session_id="", platform="", **kwargs):
     """pre_llm_call: new turn drops stale state; photo-ish requests get a nudge toward lumina_search."""
     _PENDING.pop(session_id, None)
+    if (isinstance(user_message, str) and _EXPIRY_RE.search(user_message) and _EXPIRY_OF_RE.search(user_message)
+            and not re.search(r"\b(passport|licen[cs]e|card|visa)\b", user_message, re.I)):  # one named document -> lumina_read_text below
+        return {"context": _HINT + " " + _EXPIRY_HINT}
     if isinstance(user_message, str) and _ASK_RE.search(user_message) and (_PHOTO_RE.search(user_message) or _DOC_RE.search(user_message)):
         return {"context": _HINT + " " + _ASK_HINT}
     if isinstance(user_message, str) and _PHOTO_RE.search(user_message):
@@ -238,6 +261,17 @@ _SCHEMAS = {
             "uuids": {"type": "array", "items": _STR, "minItems": 1, "maxItems": 5},
         }},
     },
+    "lumina_expiry": {
+        "name": "lumina_expiry",
+        "description": "List documents photographed in the library (passport, memberships, ID and library cards, licences) with their expiry dates, "
+                       "soonest first, with days left and a status (expired / soon / ok). Answer by leading with anything expired or expiring soon "
+                       "(with days left), then a short list of the rest. The display grid is added automatically; do not list uuids. "
+                       "The user can ask Hermes to remind them before a date (Hermes schedules it).",
+        "parameters": {"type": "object", "properties": {
+            "within_days": {"type": "integer", "minimum": 1, "maximum": 3650, "description": "Only items expiring within this many days (expired included)"},
+            "today": {**_STR, "description": "ISO date YYYY-MM-DD, default today (testing/demo)"},
+        }},
+    },
     "lumina_library_info": {
         "name": "lumina_library_info",
         "description": "Photo and video counts, top named people, and whether Lumina can read the library. Use for onboarding or permission checks.",
@@ -246,7 +280,7 @@ _SCHEMAS = {
 }
 _HANDLERS = {"lumina_search": _search, "lumina_create_album": _album, "lumina_library_info": _info,
              "lumina_on_this_day": _on_this_day, "lumina_export": _export,
-             "lumina_read_text": _read_text}
+             "lumina_read_text": _read_text, "lumina_expiry": _expiry}
 
 
 def register(ctx):

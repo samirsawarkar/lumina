@@ -12,6 +12,7 @@ provides_tools:
   - lumina_on_this_day
   - lumina_export
   - lumina_read_text
+  - lumina_expiry
 provides_hooks:
   - pre_tool_call
   - post_tool_call

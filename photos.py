@@ -359,3 +359,88 @@ def read_text(db, uuids) -> dict:
         out.append({"uuid": p.uuid, "date": p.date.isoformat() if p.date else None, "title": p.title,
                     "text": "\n".join(ocr_text(p))[:READ_TEXT_MAX]})
     return {"photos": out, "skipped": skipped}
+
+
+_EXP_KEY = re.compile(r"\b(expiry|expires|expiration|exp\.?\s*date|exp|valid\s+(?:thru|through|until|till|to)|use\s+by|renew\s+by|good\s+thru)\b[\s:.\-]*", re.I)
+_MONTHS = {m.lower(): i for i, m in enumerate(calendar.month_abbr) if m}
+_DATE = re.compile(
+    r"(?P<iy>\d{4})-(?P<im>\d{1,2})-(?P<id>\d{1,2})"
+    r"|(?P<d1>\d{1,2})\s+(?P<m1>[A-Za-z]{3,9})\.?,?\s+(?P<y1>\d{4})"
+    r"|(?P<m2>[A-Za-z]{3,9})\.?\s+(?P<d2>\d{1,2}),?\s+(?P<y2>\d{4})"
+    r"|(?P<m3>[A-Za-z]{3,9})\.?,?\s+(?P<y3>\d{4})"
+    r"|(?<!\d)(?P<a>\d{1,2})/(?P<b>\d{1,2})/(?P<y4>\d{4})(?!\d)"
+    r"|(?<!\d)(?P<m5>\d{1,2})/(?P<y5>\d{4}|\d{2})(?!\d)")
+
+
+def _month_end(y, m):
+    return dt.date(y, m, calendar.monthrange(y, m)[1])
+
+
+def _dates_in(s):
+    out = []
+    for m in _DATE.finditer(s):
+        g = m.groupdict()
+        try:
+            if g["iy"]:
+                out.append(dt.date(int(g["iy"]), int(g["im"]), int(g["id"])))
+            elif g["d1"] or g["d2"]:
+                mon = _MONTHS.get((g["m1"] or g["m2"])[:3].lower())
+                if mon:
+                    out.append(dt.date(int(g["y1"] or g["y2"]), mon, int(g["d1"] or g["d2"])))
+            elif g["m3"]:
+                mon = _MONTHS.get(g["m3"][:3].lower())
+                if mon:
+                    out.append(_month_end(int(g["y3"]), mon))
+            elif g["a"]:
+                a, b = int(g["a"]), int(g["b"])
+                # ambiguous 03/04/2030: assume day-first (documents are international); a number > 12 settles it
+                d, mo = (b, a) if a <= 12 < b else (a, b)
+                out.append(dt.date(int(g["y4"]), mo, d))
+            else:
+                y = int(g["y5"])
+                out.append(_month_end(y + 2000 if y < 100 else y, int(g["m5"])))
+        except ValueError:
+            pass
+    return out
+
+
+def parse_expiry(lines: list[str]) -> dt.date | None:
+    """Latest date found after an expiry keyword (same line, else the next line); None if there is none."""
+    found = []
+    for i, line in enumerate(lines):
+        for k in _EXP_KEY.finditer(line):
+            ds = _dates_in(line[k.end():]) or (_dates_in(lines[i + 1]) if i + 1 < len(lines) else [])
+            found += ds
+    return max(found) if found else None
+
+
+def document_name(lines: list[str]) -> str:
+    """First OCR line with letters, title-cased, max 40 chars."""
+    for s in lines:
+        if re.search(r"[A-Za-z]", s):
+            return s.strip().title()[:40].strip()
+    return "Document"
+
+
+def expiry(db, within_days=None, today=None) -> dict:
+    """Documents with an expiry date in OCR text, soonest first; expired ones have negative days_left."""
+    today = today or dt.date.today()
+    items = []
+    # ponytail: first scan of a big library is slow because OCR runs per photo (cached in sqlite afterwards)
+    for p in db.photos(movies=False):
+        if p.hidden or p.intrash or p.ismovie:
+            continue
+        try:
+            lines = ocr_text(p)
+            d = parse_expiry(lines)
+            if d is None:
+                continue
+            left = (d - today).days
+            items.append({"uuid": p.uuid, "document": document_name(lines), "expires": d.isoformat(), "days_left": left,
+                          "status": "expired" if left < 0 else "soon" if left <= 60 else "ok"})
+        except Exception:
+            continue
+    if within_days is not None:
+        items = [i for i in items if i["days_left"] <= within_days]
+    items.sort(key=lambda i: i["expires"])
+    return {"count": len(items), "items": items, "all_uuids": [i["uuid"] for i in items[:200]]}

@@ -160,3 +160,74 @@ def test_on_this_day_matching(monkeypatch):
     assert _otd(db, "2028-02-29")[0] == ["20240229"]  # leap day matches itself
     assert _otd(db, "2025-02-28")[0] == ["20240229"]  # common year: leap-day photos show on Feb 28
     assert _otd(db, "2028-02-28")[0] == []  # leap year: they wait for the 29th
+
+
+# ---- expiry radar ----
+from datetime import date
+
+
+@pytest.mark.parametrize("lines,want", [
+    (["Expiry: 01 JAN 2034"], date(2034, 1, 1)),
+    (["Date of birth: 01 JAN 1990", "Expiry: 01 JAN 2034"], date(2034, 1, 1)),
+    (["IRONWORKS GYM", "VALID THRU: 12/2026"], date(2026, 12, 31)),
+    (["IRONWORKS GYM", "VALID THRU:", "12/2026"], date(2026, 12, 31)),
+    (["LIBRARY CARD", "EXPIRES: 09/2027"], date(2027, 9, 30)),
+    (["exp. date 1/34"], date(2034, 1, 31)),
+    (["Expires Jan 1, 2034"], date(2034, 1, 1)),
+    (["Expires 1 Jan 2034"], date(2034, 1, 1)),
+    (["Expiration: 2034-01-01"], date(2034, 1, 1)),
+    (["Expires January 2034"], date(2034, 1, 31)),
+    (["Valid until 03/04/2030"], date(2030, 4, 3)),   # ambiguous -> day-first
+    (["Valid until 04/13/2030"], date(2030, 4, 13)),  # 13 can only be the day -> MM/DD
+    (["Valid thru 12/2026 or 01/2028"], date(2028, 1, 31)),
+    (["Date of birth: 01 JAN 1990"], None),
+    (["DATE: 12 MAR 2025"], None),
+    (["Pay within 14 days"], None),
+    (["Violation: Expired meter"], None),
+    (["Vaccination", "Date: 15 FEB 2023"], None),
+    ([], None),
+])
+def test_parse_expiry(lines, want):
+    assert photos.parse_expiry(lines) == want
+
+
+def test_document_name():
+    assert photos.document_name(["", "12", "IRONWORKS GYM", "x"]) == "Ironworks Gym"
+    assert photos.document_name(["PASSPORT"]) == "Passport"
+    assert len(photos.document_name(["A" * 90])) <= 40
+    assert photos.document_name(["123"]) == "Document"
+
+
+class _ExpP:
+    def __init__(self, uuid, d, hidden=False, trash=False, movie=False):
+        self.uuid, self.date, self.hidden, self.intrash, self.ismovie = uuid, d, hidden, trash, movie
+
+
+class _ExpDB:
+    def __init__(self, ps):
+        self.ps = ps
+
+    def photos(self, movies=True):
+        return self.ps
+
+
+def test_expiry_scan(monkeypatch):
+    texts = {"A": ["PASSPORT", "Expiry: 01 JAN 2034"], "B": ["IRONWORKS GYM", "VALID THRU: 12/2026"],
+             "C": ["Old card", "EXPIRES: 01/2026"], "D": ["Receipt", "Total 5"], "H": ["X", "Expiry: 01 JAN 2030"],
+             "T": ["X", "Expiry: 01 JAN 2030"], "V": ["X", "Expiry: 01 JAN 2030"]}
+
+    def fake(p):
+        if p.uuid == "E":
+            raise RuntimeError("ocr failed")
+        return texts[p.uuid]
+    monkeypatch.setattr(photos, "ocr_text", fake)
+    db = _ExpDB([_ExpP("A", None), _ExpP("B", None), _ExpP("C", None), _ExpP("D", None), _ExpP("E", None),
+              _ExpP("H", None, hidden=True), _ExpP("T", None, trash=True), _ExpP("V", None, movie=True)])
+    r = photos.expiry(db, today=date(2026, 11, 8))
+    assert [i["uuid"] for i in r["items"]] == ["C", "B", "A"] and r["all_uuids"] == ["C", "B", "A"] and r["count"] == 3
+    assert [i["status"] for i in r["items"]] == ["expired", "soon", "ok"]
+    assert r["items"][1] == {"uuid": "B", "document": "Ironworks Gym", "expires": "2026-12-31", "days_left": 53, "status": "soon"}
+    assert r["items"][0]["days_left"] < 0
+    r = photos.expiry(db, within_days=100, today=date(2026, 11, 8))
+    assert [i["uuid"] for i in r["items"]] == ["C", "B"]
+    assert "/" not in json.dumps(r["items"]).replace("\\/", "")

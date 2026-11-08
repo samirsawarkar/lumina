@@ -24,7 +24,7 @@ class Ctx:
 def test_register():
     c = Ctx()
     lumina.register(c)
-    assert set(c.tools) == {"lumina_search", "lumina_create_album", "lumina_library_info", "lumina_on_this_day", "lumina_export", "lumina_read_text"}
+    assert set(c.tools) == {"lumina_search", "lumina_create_album", "lumina_library_info", "lumina_on_this_day", "lumina_export", "lumina_read_text", "lumina_expiry"}
     assert "lumina_delete" not in c.tools and "lumina" in c.skills and "pre_tool_call" in c.hooks
     for name, (schema, _) in c.tools.items():
         assert schema["name"] == name and schema["parameters"]["type"] == "object"
@@ -264,3 +264,24 @@ def test_text_search_ignores_hyphens(library, monkeypatch):
     monkeypatch.setattr(photos, "ocr_text", lambda q: ["WI-FI password: blue-mango"])
     assert json.loads(_call("lumina_search", {"text": "wifi"}))["total_matches"] > 0
     assert json.loads(_call("lumina_search", {"text": "zz-no-such-text"}))["total_matches"] == 0
+
+
+def test_expiry_register_guard_route_display(monkeypatch):
+    from datetime import date
+    c = Ctx()
+    lumina.register(c)
+    assert "lumina_expiry" in c.tools
+    ctx = lumina._route(user_message="Is anything of mine expiring soon?", session_id="s")["context"]
+    assert "lumina_expiry" in ctx
+    assert "lumina_expiry" in lumina._route(user_message="when do my documents expire?", session_id="s")["context"]
+    assert "lumina_read_text" in lumina._route(user_message="When does my passport expire?", session_id="s")["context"]
+    assert lumina._route(user_message="what is the capital of France", session_id="s") is None
+    monkeypatch.setattr(lumina.photos, "get_db", lambda: object())
+    monkeypatch.setattr(lumina.photos, "expiry", lambda db, within_days=None, today=None: {
+        "count": 1, "items": [{"uuid": "A" * 8}], "all_uuids": ["A" * 8], "_t": today.isoformat()})
+    out = json.loads(c.tools["lumina_expiry"][1]({"today": "2026-11-08"}))
+    assert 'title="Expiry radar"' in out["display"] and "all_uuids" not in out and out["_t"] == "2026-11-08"
+    for bad in ({"within_days": 0}, {"within_days": "x"}, {"within_days": 4000}, {"today": "nope"}):
+        assert json.loads(c.tools["lumina_expiry"][1](bad))["error"] == "bad_args"
+    lumina._remember("lumina_expiry", json.dumps(out), session_id="z")
+    assert lumina._PENDING["z"] == out["display"]
