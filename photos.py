@@ -444,3 +444,158 @@ def expiry(db, within_days=None, today=None) -> dict:
         items = [i for i in items if i["days_left"] <= within_days]
     items.sort(key=lambda i: i["expires"])
     return {"count": len(items), "items": items, "all_uuids": [i["uuid"] for i in items[:200]]}
+
+
+# ---- "Make me a memory": Ken Burns slideshow (MP4 via ffmpeg, GIF fallback) ----
+MEM_MAX, MEM_TTL, MEM_W, MEM_H, MEM_FPS, MEM_CLIP, MEM_FADE = 12, 7 * 24 * 3600, 1280, 720, 25, 2.0, 0.4
+_FONTS = ("/System/Library/Fonts/Supplemental/Arial Bold.ttf", "/System/Library/Fonts/Helvetica.ttc")
+
+
+def _font(size):
+    from PIL import ImageFont
+
+    for f in _FONTS:
+        try:
+            return ImageFont.truetype(f, size)
+        except OSError:
+            pass
+    return ImageFont.load_default(size=size)
+
+
+def _pick(ps, k=MEM_MAX):
+    """Evenly spaced across the (date-sorted) list, endpoints included; a favorite neighbour wins over a plain pick."""
+    n = len(ps)
+    if n <= k:
+        return ps
+    idx = [round(j * (n - 1) / (k - 1)) for j in range(k)]
+    out = []
+    for i in idx:
+        if not ps[i].favorite:
+            for j in (i - 1, i + 1):
+                if 0 <= j < n and ps[j].favorite and j not in idx:
+                    i = j
+                    break
+        out.append(ps[i])
+    return out
+
+
+def _frame(src, caption=None, title=None, subtitle=None, size=(MEM_W, MEM_H)):
+    """Cover-cropped frame with a dark bottom gradient and caption; with `title`, a darkened title card."""
+    from PIL import Image, ImageDraw, ImageOps
+
+    w, h = size
+    im = ImageOps.fit(ImageOps.exif_transpose(Image.open(src)).convert("RGB"), size, Image.LANCZOS)
+    s = h / 720
+    if title:
+        im = Image.blend(im, Image.new("RGB", size, (0, 0, 0)), 0.55)
+    else:
+        grad = Image.linear_gradient("L").resize((w, h // 3))  # black at top -> white at bottom
+        shade = Image.new("L", size, 0)
+        shade.paste(grad.point(lambda v: int(v * 0.75)), (0, h - h // 3))
+        im = Image.composite(Image.new("RGB", size, (0, 0, 0)), im, shade)
+    d = ImageDraw.Draw(im)
+    if title:
+        d.text((w / 2, h * 0.45), title, font=_font(int(84 * s)), fill="white", anchor="mm")
+        if subtitle:
+            d.text((w / 2, h * 0.58), subtitle, font=_font(int(36 * s)), fill=(220, 220, 220), anchor="mm")
+    elif caption:
+        d.text((int(56 * s), h - int(48 * s)), caption, font=_font(int(40 * s)), fill="white", anchor="lm")
+    return im
+
+
+def _encode_mp4(ffmpeg, frames, out: Path) -> bool:
+    import subprocess
+
+    n, fr = len(frames), round(MEM_CLIP * MEM_FPS)
+    cmd = [ffmpeg, "-y", "-loglevel", "error"]
+    for f in frames:
+        cmd += ["-i", str(f)]
+    parts = [f"[{i}:v]scale={MEM_W * 2}:{MEM_H * 2},zoompan=z='1+0.08*on/{fr}':x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':"
+             f"d={fr}:s={MEM_W}x{MEM_H}:fps={MEM_FPS},setsar=1,scale=in_range=full:out_range=limited,format=yuv420p[v{i}]" for i in range(n)]
+    last = "v0"
+    for i in range(1, n):  # chained crossfades; each starts where the previous output would end, minus the overlap
+        off = round(i * (MEM_CLIP - MEM_FADE), 3)
+        parts.append(f"[{last}][v{i}]xfade=transition=fade:duration={MEM_FADE}:offset={off}[x{i}]")
+        last = f"x{i}"
+    cmd += ["-filter_complex", ";".join(parts), "-map", f"[{last}]", "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
+            "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-an", str(out)]
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=120, check=False)
+    except (subprocess.TimeoutExpired, OSError) as e:
+        log.warning("ffmpeg failed: %s", e)
+        return False
+    if r.returncode:
+        log.warning("ffmpeg failed: %s", r.stderr.decode(errors="replace")[-500:])
+    return r.returncode == 0 and out.exists()
+
+
+def make_memory(db, uuids, title) -> dict:
+    """Render up to 12 of the given photos into a ~20 s slideshow under <data_dir>/memories. Paths only in `media`."""
+    import shutil
+    import tempfile
+    import uuid as _uuid
+
+    if not isinstance(uuids, list) or not 0 < len(uuids) <= 200 or not all(isinstance(u, str) and UUID_RE.fullmatch(u) for u in uuids):
+        raise LuminaError("bad_args", "uuids must be a list of 1 to 200 photo ids from lumina_search.")
+    title = " ".join(str(title or "").split())[:60] or "Memories"
+    d = _data_dir() / "memories"
+    d.mkdir(exist_ok=True)
+    for f in d.iterdir():
+        try:
+            if time.time() - f.stat().st_mtime > MEM_TTL:
+                f.unlink()
+        except OSError:
+            pass
+    ps, skipped = [], 0
+    for u in dict.fromkeys(uuids):
+        p = db.get_photo(u)
+        if p is None or p.hidden or p.intrash or p.ismovie or p.screenshot or not _is_local(p):
+            skipped += 1
+        else:
+            ps.append(p)
+    ps.sort(key=lambda p: p.date.timestamp() if p.date else 0)
+    chosen = _pick(ps)
+    skipped += len(ps) - len(chosen)
+    work = Path(tempfile.mkdtemp(prefix="mem-", dir=_data_dir()))
+    try:
+        used = []
+        for p in chosen:
+            f = work / f"src{len(used)}.jpg"
+            try:
+                if not _export_one(p, f):
+                    skipped += 1
+                    continue
+            except Exception as e:
+                log.warning("memory export failed", exc_info=e)
+                skipped += 1
+                continue
+            used.append((p, f))
+        if not used:
+            raise LuminaError("not_found", "No photos with a local file to make a memory from.")
+        dates = [p.date for p, _ in used if p.date]
+        sub = None
+        if dates:
+            a, b = min(dates).strftime("%b %Y"), max(dates).strftime("%b %Y")
+            sub = a if a == b else f"{a} – {b}"
+        gif = not shutil.which("ffmpeg")
+        size = (960, 540) if gif else (MEM_W, MEM_H)
+        ims = [_frame(used[0][1], title=title, subtitle=sub, size=size)]
+        for p, f in used:
+            cap = p.place.name if p.place else (f"{p.date.day} {p.date:%b %Y}" if p.date else None)
+            ims.append(_frame(f, caption=cap, size=size))
+        name = _uuid.uuid4().hex[:12]
+        if gif:
+            out = d / f"{name}.gif"
+            ims[0].save(out, save_all=True, append_images=ims[1:], duration=1600, loop=0)
+            secs = 1.6 * len(ims)
+        else:
+            for i, im in enumerate(ims):
+                im.save(work / f"f{i:02d}.jpg", quality=92)
+            out = d / f"{name}.mp4"
+            if not _encode_mp4(shutil.which("ffmpeg"), [work / f"f{i:02d}.jpg" for i in range(len(ims))], out):
+                raise LuminaError("render_failed", "Could not render the memory video.")
+            secs = len(ims) * (MEM_CLIP - MEM_FADE) + MEM_FADE
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    return {"media": f"MEDIA:{out}", "photos": len(used), "duration_s": round(secs, 1), "title": title,
+            "format": out.suffix[1:], "skipped": skipped}

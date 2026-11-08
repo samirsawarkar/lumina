@@ -18,5 +18,6 @@ Use when the user asks about their photos ("find my passport", "photos of Mom at
 8. Scheduling: users can ask Hermes itself ("every morning at 9, send me my On this day photos") and Hermes creates the scheduled job; that job should call `lumina_on_this_day` then `lumina_export`. The plugin has no scheduler of its own.
 9. Questions answered by a photo ("when does my passport expire?", "what's my Wi-Fi password?"): `lumina_search` with `text` for the document, then `lumina_read_text` with the best 1-3 uuids, and answer with just the fact in one short sentence. Its `display` is appended automatically; do not list uuids.
 10. "Is anything expiring?" / "when do my documents expire?": call `lumina_expiry` (optional `within_days`), lead with anything `expired` or `soon` (with days left), then list the rest briefly; its `display` is appended automatically. To get reminders, ask Hermes to schedule one (e.g. a month before the date).
+11. "Make a memory / video / slideshow of my Goa trip": call `lumina_make_memory` with the search filters (or uuids from the last search), then put the returned `media` line (`MEDIA:/...mp4`) on its own line with no other text on it, plus one warm sentence. It plays inline on desktop and is sent as a video on Telegram/WhatsApp.
 
 Lumina is read-only apart from creating albums. It cannot delete photos.

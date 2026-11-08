@@ -13,6 +13,7 @@ provides_tools:
   - lumina_export
   - lumina_read_text
   - lumina_expiry
+  - lumina_make_memory
 provides_hooks:
   - pre_tool_call
   - post_tool_call

@@ -24,7 +24,7 @@ class Ctx:
 def test_register():
     c = Ctx()
     lumina.register(c)
-    assert set(c.tools) == {"lumina_search", "lumina_create_album", "lumina_library_info", "lumina_on_this_day", "lumina_export", "lumina_read_text", "lumina_expiry"}
+    assert set(c.tools) == {"lumina_search", "lumina_create_album", "lumina_library_info", "lumina_on_this_day", "lumina_export", "lumina_read_text", "lumina_expiry", "lumina_make_memory"}
     assert "lumina_delete" not in c.tools and "lumina" in c.skills and "pre_tool_call" in c.hooks
     for name, (schema, _) in c.tools.items():
         assert schema["name"] == name and schema["parameters"]["type"] == "object"
@@ -285,3 +285,74 @@ def test_expiry_register_guard_route_display(monkeypatch):
         assert json.loads(c.tools["lumina_expiry"][1](bad))["error"] == "bad_args"
     lumina._remember("lumina_expiry", json.dumps(out), session_id="z")
     assert lumina._PENDING["z"] == out["display"]
+
+
+# ---- make memory ----
+GOOD = "0A1B2C3D-0000-1111-2222-333344445555"
+
+
+def test_memory_guard_and_route():
+    g = lumina._guard
+    assert g("lumina_make_memory", {"uuids": ["bad"]})["action"] == "block"
+    assert g("lumina_make_memory", {"uuids": []})["action"] == "block"
+    assert g("lumina_make_memory", {"uuids": [GOOD] * 201})["action"] == "block"
+    assert g("lumina_make_memory", {"uuids": [GOOD]}) is None
+    assert g("lumina_make_memory", {"place": "Goa"}) is None
+    for m in ("Make a memory of my Goa trip", "make a video of my 2025 photos"):
+        assert "lumina_make_memory" in lumina._route(m, session_id="s")["context"]
+    assert "lumina_make_memory" not in (lumina._route("what's a good movie tonight", session_id="s") or {}).get("context", "")
+    assert lumina._route("make a video call to mom", session_id="s") is None
+    assert "lumina_make_memory" not in (lumina._route("show my on this day memories photos", session_id="s") or {}).get("context", "")
+
+
+def test_memory_media_flow():
+    lumina._PENDING_MEDIA.clear()
+    M = "MEDIA:/x/a.mp4"
+    rem = lambda sid="s": lumina._remember("lumina_make_memory", json.dumps({"media": M}), session_id=sid)  # noqa: E731
+    for plat in ("telegram", "desktop"):
+        rem()
+        assert lumina._append("Enjoy!", session_id="s", platform=plat) == f"Enjoy!\n\n{M}"
+        assert lumina._append("Enjoy!", session_id="s", platform=plat) is None
+    rem()
+    assert lumina._append(f"Hi\n{M}", session_id="s", platform="telegram") is None
+    rem()
+    lumina._route("thanks", session_id="s")
+    assert lumina._append("x", session_id="s") is None
+    for i in range(300):
+        rem(f"s{i}")
+    assert len(lumina._PENDING_MEDIA) == 200
+
+
+def test_make_memory_render(library, monkeypatch, tmp_path):
+    import shutil
+    import subprocess
+
+    from lumina import photos
+
+    monkeypatch.setenv("LUMINA_LIBRARY", library)
+    db = photos.get_db()
+    ps = [p for p in db.photos() if photos._is_local(p) and not p.screenshot][:4]
+    if not ps:
+        pytest.skip("no local photos in test library")
+    u = [p.uuid for p in ps]
+    old = tmp_path / "memories" / "old.mp4"
+    old.parent.mkdir()
+    old.write_bytes(b"x")
+    import os
+    os.utime(old, (1, 1))
+    out = json.loads(_call("lumina_make_memory", {"uuids": u, "title": "Test trip"}))
+    assert not old.exists() and not list(tmp_path.glob("mem-*"))
+    assert out["media"].startswith("MEDIA:") and Path(out["media"][6:]).exists() and out["photos"] >= 1
+    if shutil.which("ffmpeg") and shutil.which("ffprobe"):
+        assert out["format"] == "mp4"
+        r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height:format=duration",
+                            "-of", "json", out["media"][6:]], capture_output=True, text=True)
+        j = json.loads(r.stdout)
+        assert float(j["format"]["duration"]) > 0 and (j["streams"][0]["width"], j["streams"][0]["height"]) == (1280, 720)
+    monkeypatch.setattr(photos.shutil if hasattr(photos, "shutil") else __import__("shutil"), "which", lambda *_: None)
+    g = json.loads(_call("lumina_make_memory", {"uuids": u}))
+    assert g["format"] == "gif" and Path(g["media"][6:]).exists()
+    bad = _call("lumina_make_memory", {"uuids": ["bad"]})
+    assert json.loads(bad)["error"] == "bad_args" and str(tmp_path) not in bad
+    nf = _call("lumina_make_memory", {"uuids": ["00000000-0000-0000-0000-000000000000"]})
+    assert json.loads(nf)["error"] == "not_found" and str(tmp_path) not in nf
