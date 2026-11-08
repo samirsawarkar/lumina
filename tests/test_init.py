@@ -391,3 +391,18 @@ def test_make_memory_failure_removes_partial(library, monkeypatch, tmp_path):
     monkeypatch.setattr(shutil, "which", lambda *_: "/bin/ffmpeg")
     assert json.loads(_call("lumina_make_memory", {"uuids": u}))["error"] == "render_failed"
     assert not list((tmp_path / "memories").glob("*.mp4"))
+
+
+def test_safe_send_reply_shows_only_the_safe_copy():
+    M = "MEDIA:/h/plugin-data/agent-plugin-lumina-x/redacted/abcdef012345.jpg"
+    D = '::lumina-redact{id="abcdef012345"}'
+    reply = f'Done.\n::lumina-photos{{ids="A" title="Gym"}}\nHere it is: {M[6:]}\n{M}\n{D}'
+    for plat, want, gone in (("desktop", D, ["::lumina-photos", "MEDIA:", "/h/plugin-data"]),
+                             ("telegram", M, ["::lumina-photos", "::lumina-redact", "Here it is: /h"])):
+        lumina._PENDING.clear()
+        lumina._PENDING_MEDIA.clear()
+        lumina._remember("lumina_redact", json.dumps({"media": M, "display": D}), session_id="s")
+        out = lumina._append(reply, session_id="s", platform=plat)
+        assert out.count(want) == 1 and all(g not in out for g in gone), (plat, out)
+    lumina._remember("lumina_redact", json.dumps({"media": M, "display": D}), session_id="s")
+    assert lumina._append("Safe copy ready.", session_id="s", platform="desktop").endswith(D)

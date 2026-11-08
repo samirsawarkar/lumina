@@ -267,11 +267,36 @@ def _remember(tool_name, result, session_id="", **kwargs):
             _PENDING.pop(next(iter(_PENDING)))
 
 
+_DATA_PATH_RE = re.compile(r"/\S*plugin-data/\S+")
+
+
+def _tidy_redact(text, media, display, messaging):
+    """After a Safe Send, show only the safe copy: no original-photo grid, no file paths; the right delivery line once."""
+    keep = []
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("MEDIA:"):
+            if messaging and s not in keep:
+                keep.append(s)
+            continue
+        if s.startswith("::lumina-photos{") or (messaging and s.startswith("::lumina-redact{")):
+            continue
+        keep.append(_DATA_PATH_RE.sub("the safe copy", line))
+    out = "\n".join(keep).rstrip()
+    if messaging and media and media not in out:
+        out += f"\n\n{media}"
+    if not messaging and display and "::lumina-redact{" not in out:
+        out += f"\n\n{display}"
+    return out if out != text else None
+
+
 def _append(response_text="", session_id="", platform="", **kwargs):
     """transform_llm_output: add the grid directive if the model forgot it (desktop only; chat apps cannot render it)."""
     m = _PENDING_MEDIA.pop(session_id, None)
     red = session_id in _REDACT_MEDIA
     _REDACT_MEDIA.discard(session_id)
+    if red:
+        return _tidy_redact(response_text, m, _PENDING.pop(session_id, None), _messaging(platform))
     if m and not (red and not _messaging(platform)):  # desktop shows the redact before/after view, not the bare image too
         if m not in response_text:
             return f"{response_text.rstrip()}\n\n{m}"
