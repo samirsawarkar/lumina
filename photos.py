@@ -426,7 +426,7 @@ def _encode_mp4(ffmpeg, frames, out: Path) -> bool:
     for f in frames:
         cmd += ["-i", str(f)]
     parts = [f"[{i}:v]scale={MEM_W * 2}:{MEM_H * 2},zoompan=z='1+0.08*on/{fr}':x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':"
-             f"d={fr}:s={MEM_W}x{MEM_H}:fps={MEM_FPS},setsar=1,format=yuv420p[v{i}]" for i in range(n)]
+             f"d={fr}:s={MEM_W}x{MEM_H}:fps={MEM_FPS},setsar=1,scale=in_range=full:out_range=limited,format=yuv420p[v{i}]" for i in range(n)]
     last = "v0"
     for i in range(1, n):  # chained crossfades; each starts where the previous output would end, minus the overlap
         off = round(i * (MEM_CLIP - MEM_FADE), 3)
