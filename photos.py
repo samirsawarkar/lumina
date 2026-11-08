@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import base64
+import calendar
 import datetime as dt
 import io
 import json
 import logging
 import os
+import re
 import sqlite3
 import threading
+import time
 from pathlib import Path
 
 NO_ACCESS_MSG = (
@@ -79,10 +82,14 @@ def set_cache_dir(path) -> None:
     _cache_dir = Path(path) if path else None
 
 
-def _cache_file() -> Path:
+def _data_dir() -> Path:
     d = _cache_dir or Path(os.environ.get("HERMES_HOME") or "~/.hermes").expanduser() / "plugin-data" / "lumina"
     d.mkdir(parents=True, exist_ok=True)
-    return d / "ocr.sqlite"
+    return d
+
+
+def _cache_file() -> Path:
+    return _data_dir() / "ocr.sqlite"
 
 
 def _sig(p) -> str:
@@ -154,8 +161,9 @@ def _day(s: str) -> dt.date:
 
 
 def search(db, text=None, person=None, place=None, label=None, date_from=None, date_to=None,
-           media="any", limit=24) -> dict:
-    if not any([text, person, place, label, date_from, date_to]):
+           media="any", limit=24, on_day=None) -> dict:
+    """on_day (a date): only photos from the same month/day in earlier years (used by On this day)."""
+    if not any([text, person, place, label, date_from, date_to, on_day]):
         raise LuminaError("bad_args", "Give at least one of text, person, place, label, date_from, date_to.")
     if media not in ("photo", "video", "screenshot", "any"):
         raise LuminaError("bad_args", "media must be photo, video, screenshot or any.")
@@ -165,6 +173,9 @@ def search(db, text=None, person=None, place=None, label=None, date_from=None, d
         raise LuminaError("bad_args", "limit must be an integer.") from None
     d0, d1 = (_day(date_from) if date_from else None), (_day(date_to) if date_to else None)
     low = lambda s: (s or "").lower()  # noqa: E731
+    md = {(on_day.month, on_day.day)} if on_day else set()
+    if on_day and md == {(2, 28)} and not calendar.isleap(on_day.year):
+        md.add((2, 29))  # leap-day photos surface on Feb 28 in common years
     hits = []
     # ponytail: linear scan over db.photos(); add an index if libraries >100k feel slow
     for p in db.photos(movies=True):
@@ -174,6 +185,8 @@ def search(db, text=None, person=None, place=None, label=None, date_from=None, d
         if (d0 or d1) and day is None:
             continue
         if (d0 and day < d0) or (d1 and day > d1):
+            continue
+        if on_day and (day is None or day.year >= on_day.year or (day.month, day.day) not in md):
             continue
         if media == "photo" and (p.ismovie or p.screenshot):
             continue
@@ -199,7 +212,9 @@ def search(db, text=None, person=None, place=None, label=None, date_from=None, d
         hits.append(p)
     hits.sort(key=lambda p: p.date.timestamp() if p.date else 0, reverse=True)
     return {"count": min(len(hits), limit), "total_matches": len(hits),
-            "photos": [photo_dict(p) for p in hits[:limit]], "all_uuids": [p.uuid for p in hits[:200]]}
+            "photos": [photo_dict(p) for p in hits[:limit]], "all_uuids": [p.uuid for p in hits[:200]],
+            **({"by_year": {str(y): sum(1 for p in hits if p.date.year == y)
+                            for y in sorted({p.date.year for p in hits}, reverse=True)}} if on_day else {})}
 
 
 def library_info(db) -> dict:
@@ -265,3 +280,64 @@ def thumb_data_url(p, size: str = "s") -> str | None:
             return None
         data = Path(derived[0]).read_bytes()
     return "data:image/jpeg;base64," + base64.b64encode(data).decode()
+
+
+# ---- export for messaging platforms: resized JPEGs the gateway can upload via MEDIA: tags ----
+UUID_RE = re.compile(r"[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}")
+EXPORT_MAX_SIDE, EXPORT_TTL = 2048, 24 * 3600
+
+
+def _export_one(p, out: Path) -> bool:
+    """Write p as a JPEG (long side <= 2048, EXIF dropped) to out. False when there is no local file."""
+    from PIL import Image, ImageOps
+
+    src = None
+    if p.ismovie:
+        return False
+    if p.path and os.path.exists(p.path):
+        from osxphotos import ExportOptions, PhotoExporter
+
+        # convert_to_jpeg turns HEIC/PNG/etc. into JPEG without opening the Photos app
+        r = PhotoExporter(p).export(str(out.parent), out.name, options=ExportOptions(convert_to_jpeg=True, overwrite=True))
+        src = r.exported[0] if r.exported else None
+    else:
+        derived = sorted((d for d in (p.path_derivatives or []) if os.path.exists(d)), key=os.path.getsize, reverse=True)
+        src = derived[0] if derived else None
+    if not src:
+        return False
+    im = ImageOps.exif_transpose(Image.open(src)).convert("RGB")
+    im.thumbnail((EXPORT_MAX_SIDE, EXPORT_MAX_SIDE))
+    im.save(out, "JPEG", quality=88)  # fresh mtime: the gateway's strict mode trusts recently produced files
+    return True
+
+
+def export(db, uuids) -> dict:
+    """Export photos to <data_dir>/exports/<uuid>.jpg. Paths appear only in `media`, never in errors."""
+    if not isinstance(uuids, list) or not 0 < len(uuids) <= 10 or not all(isinstance(u, str) and UUID_RE.fullmatch(u) for u in uuids):
+        raise LuminaError("bad_args", "uuids must be a list of 1 to 10 photo ids from lumina_search.")
+    d = _data_dir() / "exports"
+    d.mkdir(exist_ok=True)
+    for f in d.glob("*.jpg"):
+        try:
+            if time.time() - f.stat().st_mtime > EXPORT_TTL:
+                f.unlink()
+        except OSError:
+            pass
+    media, skipped = [], []
+    for u in dict.fromkeys(uuids):
+        p = db.get_photo(u)
+        if p is None or p.intrash:
+            skipped.append({"uuid": u, "reason": "not_found"})
+            continue
+        out = d / f"{p.uuid}.jpg"
+        try:
+            ok = _export_one(p, out)
+        except Exception as e:
+            log.warning("export failed", exc_info=e)
+            skipped.append({"uuid": u, "reason": "export_failed"})
+            continue
+        if ok:
+            media.append(f"MEDIA:{out}")
+        else:
+            skipped.append({"uuid": u, "reason": "no local file (stored in iCloud) or a video"})
+    return {"exported": len(media), "media": media, "skipped": skipped}

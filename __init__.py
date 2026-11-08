@@ -60,11 +60,11 @@ def _title(a):
     return t[:1].upper() + t[1:] or "Photos"
 
 
-def _display(a, res):
+def _display(a, res, title=None):
     """Ready-to-paste transcript directive covering ALL matches (newest first, max 200)."""
     if not res["photos"]:
         return None
-    return f'::lumina-photos{{ids="{",".join(res["all_uuids"])}" title="{_title(a)}"}}'
+    return f'::lumina-photos{{ids="{",".join(res["all_uuids"])}" title="{title or _title(a)}"}}'
 
 
 def _search(a):
@@ -74,6 +74,20 @@ def _search(a):
         res["display"] = d
     res.pop("all_uuids")
     return res
+
+
+def _on_this_day(a):
+    day = photos._day(a["date"]) if a.get("date") else dt.date.today()
+    res = photos.search(photos.get_db(), on_day=day, limit=a.get("limit") or 24)
+    res.setdefault("all_uuids", [p["uuid"] for p in res["photos"]])
+    if d := _display(a, res, f"On this day \u00b7 {day.day} {day:%b}"):
+        res["display"] = d
+    res.pop("all_uuids")
+    return res
+
+
+def _export(a):
+    return photos.export(photos.get_db(), a.get("uuids"))
 
 
 def _album(a):
@@ -86,7 +100,12 @@ def _info(_a):
 
 
 def _guard(tool_name, args, **kwargs):
-    """Veto malformed album requests before they reach Apple Photos."""
+    """Veto malformed album / export requests before they reach Apple Photos or the disk."""
+    if tool_name == "lumina_export":
+        u = (args or {}).get("uuids")
+        if not isinstance(u, list) or not 0 < len(u) <= 10 or not all(isinstance(x, str) and photos.UUID_RE.fullmatch(x) for x in u):
+            return {"action": "block", "message": "lumina_export needs 1-10 photo uuids from a previous lumina_search."}
+        return None
     if tool_name != "lumina_create_album":
         return None
     u = (args or {}).get("uuids")
@@ -98,6 +117,17 @@ def _guard(tool_name, args, **kwargs):
 _PENDING = {}  # session -> display from this turn's lumina_search; capped, cleared on use and at the next turn
 _MARKER = "::lumina-photos{"
 _PHOTO_RE = re.compile(r"\b(photos?|pictures?|pics?|albums?|selfies?|screenshots?|find my|passport|receipt)\b", re.I)
+_SEND_RE = re.compile(r"\b(send|share|text|message|forward|whatsapp|telegram)\b", re.I)
+_LOCAL_SURFACES = {"", "cli", "tui", "desktop", "local"}  # Hermes agent.platform values with an in-app photo grid
+
+
+def _messaging(platform):
+    return (platform or "").lower() not in _LOCAL_SURFACES
+
+
+_SEND_HINT = ("The user is on a messaging platform and wants photos sent. Call lumina_search, then lumina_export with the chosen uuids "
+              "(max 10) and put each returned MEDIA:<path> line on its own line in your reply so the image is delivered. "
+              "Do not paste the ::lumina-photos directive here.")
 _HINT = ("Lumina's lumina_search is the source of truth for the user's Apple Photos library: use it, not terminal or file search, "
          "for photo questions. Present what it finds without judging whether images are real or samples. The photo grid is attached "
          "automatically, so answer in one or two short sentences and do not list uuids or file paths.")
@@ -106,7 +136,7 @@ _HINT = ("Lumina's lumina_search is the source of truth for the user's Apple Pho
 def _remember(tool_name, result, session_id="", task_id="", **kwargs):
     """post_tool_call: keep the latest lumina_search display for this session."""
     key = session_id or task_id
-    if tool_name != "lumina_search" or not key:
+    if tool_name not in ("lumina_search", "lumina_on_this_day") or not key:
         return
     try:
         d = json.loads(result).get("display")
@@ -119,19 +149,19 @@ def _remember(tool_name, result, session_id="", task_id="", **kwargs):
             _PENDING.pop(next(iter(_PENDING)))
 
 
-def _append(response_text="", session_id="", **kwargs):
-    """transform_llm_output: add the grid directive if the model forgot it."""
+def _append(response_text="", session_id="", platform="", **kwargs):
+    """transform_llm_output: add the grid directive if the model forgot it (desktop only; chat apps cannot render it)."""
     d = _PENDING.pop(session_id, None)
-    if d and _MARKER not in response_text:
+    if d and _MARKER not in response_text and not _messaging(platform):
         return f"{response_text.rstrip()}\n\n{d}"
     return None
 
 
-def _route(user_message="", session_id="", **kwargs):
+def _route(user_message="", session_id="", platform="", **kwargs):
     """pre_llm_call: new turn drops stale state; photo-ish requests get a nudge toward lumina_search."""
     _PENDING.pop(session_id, None)
     if isinstance(user_message, str) and _PHOTO_RE.search(user_message):
-        return {"context": _HINT}
+        return {"context": _HINT + (" " + _SEND_HINT if _messaging(platform) and _SEND_RE.search(user_message) else "")}
     return None
 
 
@@ -161,13 +191,32 @@ _SCHEMAS = {
             "uuids": {"type": "array", "items": _STR, "maxItems": 500},
         }},
     },
+    "lumina_on_this_day": {
+        "name": "lumina_on_this_day",
+        "description": "Photos taken on this day (same month and day) in earlier years, newest year first, with a `by_year` count. "
+                       "Optional ISO `date` (default today). Results include a `display` line: paste it verbatim on its own line.",
+        "parameters": {"type": "object", "properties": {
+            "date": {**_STR, "description": "ISO date YYYY-MM-DD, default today"},
+            "limit": {"type": "integer", "description": "Default 24, max 200"},
+        }},
+    },
+    "lumina_export": {
+        "name": "lumina_export",
+        "description": "Export up to 10 photos (uuids from lumina_search) as JPEGs so a messaging app (Telegram, WhatsApp, ...) can deliver them. "
+                       "Returns `media` lines like MEDIA:/path.jpg: put EACH one on its own line in your reply to send the image. "
+                       "Only for messaging platforms; on desktop use the ::lumina-photos display.",
+        "parameters": {"type": "object", "required": ["uuids"], "properties": {
+            "uuids": {"type": "array", "items": _STR, "minItems": 1, "maxItems": 10},
+        }},
+    },
     "lumina_library_info": {
         "name": "lumina_library_info",
         "description": "Photo and video counts, top named people, and whether Lumina can read the library. Use for onboarding or permission checks.",
         "parameters": {"type": "object", "properties": {}},
     },
 }
-_HANDLERS = {"lumina_search": _search, "lumina_create_album": _album, "lumina_library_info": _info}
+_HANDLERS = {"lumina_search": _search, "lumina_create_album": _album, "lumina_library_info": _info,
+             "lumina_on_this_day": _on_this_day, "lumina_export": _export}
 
 
 def register(ctx):

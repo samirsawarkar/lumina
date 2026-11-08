@@ -119,3 +119,44 @@ def test_ocr_cache(tmp_path):
         assert photos.ocr_text(p) == ["PASSPORT"]
     finally:
         photos.set_cache_dir(None)
+
+
+class _P:
+    def __init__(self, y, m, d):
+        import datetime as dt
+        self.uuid = f"{y}{m:02}{d:02}"
+        self.date = dt.datetime(y, m, d, 12)
+        self.hidden = self.intrash = self.ismovie = self.screenshot = False
+        self.title = self.description = None
+        self.persons = self.labels = self.keywords = []
+        self.place = None
+
+
+class _DB:
+    def __init__(self, *ps):
+        self.ps = ps
+
+    def photos(self, movies=False):
+        return list(self.ps)
+
+
+def _otd(db, day):
+    import datetime as dt
+    from lumina import photos
+
+    r = photos.search(db, on_day=dt.date.fromisoformat(day))
+    return [p["uuid"] for p in r["photos"]], r["by_year"]
+
+
+def test_on_this_day_matching(monkeypatch):
+    from lumina import photos
+
+    monkeypatch.setattr(photos, "photo_dict", lambda p: {"uuid": p.uuid})
+    db = _DB(_P(2020, 11, 8), _P(2024, 11, 8), _P(2025, 11, 8), _P(2023, 11, 9), _P(2022, 12, 31), _P(2023, 1, 1), _P(2024, 2, 29))
+    ids, by = _otd(db, "2025-11-08")  # same-year and other days excluded, newest year first
+    assert ids == ["20241108", "20201108"] and by == {"2024": 1, "2020": 1}
+    assert _otd(db, "2024-01-01")[0] == ["20230101"]  # year boundary: Dec 31 2022 is not Jan 1
+    assert _otd(db, "2023-12-31")[0] == ["20221231"]
+    assert _otd(db, "2028-02-29")[0] == ["20240229"]  # leap day matches itself
+    assert _otd(db, "2025-02-28")[0] == ["20240229"]  # common year: leap-day photos show on Feb 28
+    assert _otd(db, "2028-02-28")[0] == []  # leap year: they wait for the 29th

@@ -13,4 +13,8 @@ Use when the user asks about their photos ("find my passport", "photos of Mom at
 4. Call `lumina_library_info` when the user asks what Lumina can see, or to check permissions.
 5. If a tool returns `no_access`, explain plainly: System Settings > Privacy & Security > Full Disk Access, enable Hermes (or the terminal running it), restart. If `photos_app_error` on albums, Photos may need Automation permission under Privacy & Security > Automation.
 
+6. "On this day" / memories: call `lumina_on_this_day` (optional ISO `date`, default today) and paste its `display` like a search result; mention the `by_year` counts.
+7. On a messaging platform (Telegram, WhatsApp, ...) the grid cannot render. To send photos ("send me my passport photo"), call `lumina_search`, then `lumina_export` with up to 10 uuids, and put each `media` line (`MEDIA:/...jpg`) on its own line in the reply, with no other text on that line. Do not paste the `::lumina-photos` directive there. Photos only in iCloud are reported in `skipped`; tell the user.
+8. Scheduling: users can ask Hermes itself ("every morning at 9, send me my On this day photos") and Hermes creates the scheduled job; that job should call `lumina_on_this_day` then `lumina_export`. The plugin has no scheduler of its own.
+
 Lumina is read-only apart from creating albums. It cannot delete photos.

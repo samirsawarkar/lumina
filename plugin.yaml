@@ -9,6 +9,8 @@ provides_tools:
   - lumina_search
   - lumina_create_album
   - lumina_library_info
+  - lumina_on_this_day
+  - lumina_export
 provides_hooks:
   - pre_tool_call
   - post_tool_call
@@ -17,3 +19,4 @@ provides_hooks:
 python_dependencies:
   - "osxphotos>=0.70,<1"
   - "photoscript>=0.4,<1"
+  - "Pillow>=10,<14"
