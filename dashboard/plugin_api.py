@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import base64
 import importlib.util
+import io
+import json
 import re
 from functools import lru_cache
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
 
 # Loaded by path: this file may be imported outside the plugin package.
 _spec = importlib.util.spec_from_file_location("lumina_photos", Path(__file__).resolve().parent.parent / "photos.py")
@@ -52,6 +56,31 @@ def open_photo(uuid: str):
     except photos.LuminaError as e:
         raise HTTPException(500, detail={"error": e.code, "message": e.message})
     return {"ok": True}
+
+
+_RID = re.compile(r"^[0-9a-f]{12}$")
+
+
+@router.get("/redact")
+def redact_view(id: str = ""):
+    """Before/after for a Safe Send copy. Meta carries no sensitive values; paths are never returned."""
+    if not _RID.fullmatch(id):
+        return JSONResponse({"error": "bad_args"}, status_code=400)
+    d = photos._data_dir() / "redacted"
+    try:
+        meta = json.loads((d / f"{id}.json").read_text())
+        from PIL import Image
+
+        im = Image.open(d / f"{id}.jpg").convert("RGB")
+    except (OSError, ValueError):
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    im.thumbnail((1024, 1024))
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=85)
+    p = _db().get_photo(meta["uuid"])
+    return {**{k: meta[k] for k in ("id", "uuid", "document", "preset", "found", "remaining", "verified", "kinds")},
+            "before": photos.thumb_data_url(p, "m") if p is not None else None,
+            "after": "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()}
 
 
 @router.get("/status")

@@ -30,3 +30,8 @@ def _ocr_cache_dir(tmp_path, monkeypatch):
     from lumina import photos
 
     monkeypatch.setattr(photos, "_cache_dir", tmp_path)  # never touch the real plugin-data
+
+
+@pytest.fixture(autouse=True)
+def _no_personal_library(tmp_path, monkeypatch):
+    monkeypatch.setenv("LUMINA_LIBRARY", str(tmp_path / "none.photoslibrary"))  # never open the user's real Photos library

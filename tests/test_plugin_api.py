@@ -51,3 +51,31 @@ def test_status_no_access(monkeypatch, library):
         raise m.photos.LuminaError("no_access", "x")
     monkeypatch.setattr(m.photos, "get_db", boom)
     assert c.get("/api/plugins/lumina/status").json()["access"] == "no_access"
+
+
+def test_redact_endpoint(monkeypatch, library, tmp_path):
+    import json
+
+    c, m = client(monkeypatch, library)
+    monkeypatch.setattr(m.photos, "_cache_dir", tmp_path)  # the API loads its own photos module
+    d = m.photos._data_dir() / "redacted"
+    d.mkdir()
+    from PIL import Image
+
+    Image.new("RGB", (2000, 1000), "black").save(d / "abcdef012345.jpg")
+    meta = {"id": "abcdef012345", "uuid": "00000000-0000-0000-0000-000000000000", "document": "Passport", "preset": "hotel",
+            "found": 3, "remaining": 0, "verified": True, "kinds": ["dob"], "created": "2026-01-01T00:00:00"}
+    (d / "abcdef012345.json").write_text(json.dumps(meta))
+    monkeypatch.setattr(m.photos, "thumb_data_url", lambda p, s: "data:image/jpeg;base64,AAAA")
+    monkeypatch.setattr(m.photos, "get_db", lambda: type("D", (), {"get_photo": lambda s, u: object()})())
+    base = "/api/plugins/lumina/redact"
+    for bad in ("", "ABCDEF012345", "abc", "../../etc/passwd", "abcdef01234g"):
+        assert c.get(base, params={"id": bad}).status_code == 400
+    assert c.get(base, params={"id": "000000000000"}).status_code == 404
+    assert c.get(base, params={"id": "000000000000"}).json() == {"error": "not_found"}
+    r = c.get(base, params={"id": "abcdef012345"})
+    assert r.status_code == 200
+    j = r.json()
+    assert j["before"] == "data:image/jpeg;base64,AAAA" and j["after"].startswith("data:image/jpeg;base64,")
+    assert {k: j[k] for k in meta if k != "created"} == {k: v for k, v in meta.items() if k != "created"}
+    assert set(j) == {"id", "uuid", "document", "preset", "found", "remaining", "verified", "kinds", "before", "after"}

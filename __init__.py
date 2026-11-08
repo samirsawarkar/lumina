@@ -5,10 +5,13 @@ from __future__ import annotations
 import datetime as dt
 import json
 import platform
+import logging
 import re
 from pathlib import Path
 
-from . import photos
+from . import photos, redact
+
+log = logging.getLogger(__name__)
 
 
 def _json(fn):
@@ -134,12 +137,39 @@ def _info(_a):
     return photos.library_info(photos.get_db())
 
 
+def _redact(a):
+    return redact.redact(photos.get_db(), a.get("uuid"), a.get("preset") or "hotel")
+
+
+def _id_guard(uuids):
+    """Guardian: block message for the first uuid whose cached OCR text looks like an ID document. Fails open."""
+    try:
+        db = photos.get_db()
+        for u in uuids:
+            p = db.get_photo(u)
+            lines = photos.ocr_text(p) if p is not None else []
+            if redact.looks_like_id(lines):
+                name = re.sub(r"[^\w ]", "", redact.safe_name(lines))[:40].strip() or "This photo"
+                return {"action": "block", "message": (
+                    f"Lumina Guardian: {name} looks like an ID document. Do not send the original. Call lumina_redact with uuid={u} "
+                    "(preset hotel/airline/all to match the recipient) and send its result instead. Only if the user explicitly asks "
+                    "for the unredacted original, call lumina_export again with allow_original=true.")}
+    except Exception as e:
+        log.warning("Guardian check failed, allowing export: %s", type(e).__name__)
+    return None
+
+
 def _guard(tool_name, args, **kwargs):
     """Veto malformed album / export requests before they reach Apple Photos or the disk."""
     if tool_name == "lumina_export":
         u = (args or {}).get("uuids")
         if not isinstance(u, list) or not 0 < len(u) <= 10 or not all(isinstance(x, str) and photos.UUID_RE.fullmatch(x) for x in u):
             return {"action": "block", "message": "lumina_export needs 1-10 photo uuids from a previous lumina_search."}
+        return None if (args or {}).get("allow_original") is True else _id_guard(list(dict.fromkeys(u)))
+    if tool_name == "lumina_redact":
+        a = args or {}
+        if not isinstance(a.get("uuid"), str) or not photos.UUID_RE.fullmatch(a["uuid"]) or a.get("preset", "hotel") not in redact.PRESETS:
+            return {"action": "block", "message": "lumina_redact needs one photo uuid from a previous lumina_search and preset hotel, airline or all."}
         return None
     if tool_name == "lumina_read_text":
         u = (args or {}).get("uuids")
@@ -159,7 +189,8 @@ def _guard(tool_name, args, **kwargs):
     return None
 
 
-_PENDING_MEDIA = {}  # session -> MEDIA line from this turn's lumina_make_memory (all platforms)
+_PENDING_MEDIA = {}  # session -> MEDIA line from this turn's lumina_make_memory (all platforms) or lumina_redact (messaging only)
+_REDACT_MEDIA = set()  # sessions whose pending media came from lumina_redact: desktop shows the before/after display instead
 _PENDING = {}  # session -> display from this turn's lumina_search; capped, cleared on use and at the next turn
 _MARKER = "::lumina-photos{"
 _PHOTO_RE = re.compile(r"\b(photos?|pictures?|pics?|albums?|selfies?|screenshots?|find my|passport|receipt)\b", re.I)
@@ -169,6 +200,9 @@ _EXPIRY_OF_RE = re.compile(r"\b(passport|licen[cs]e|card|membership|documents?|i
 _DOC_RE = re.compile(r"\b(passport|receipt|bill|ticket|card|wi-?fi|licen[cs]e)\b", re.I)
 _SEND_RE = re.compile(r"\b(send|share|text|message|forward|whatsapp|telegram)\b", re.I)
 _MEMORY_RE = re.compile(r"\b(memory|memories|recap|slideshow|video|movie|film|montage|reel)\b", re.I)
+_HIDE_RE = re.compile(r"\b(hide|hiding|redact\w*|blur\w*|cover|censor\w*|mask\w*|safe|safely)\b", re.I)
+_IDDOC_RE = re.compile(r"\b(passport|id|licen[cs]e|card|visa|document|ticket|boarding pass|insurance|certificate)\b", re.I)
+_SEND_ID_RE = re.compile(r"\b(send|share|forward|text|whatsapp|email)\b.*\b(passport|id|licen[cs]e|card)\b", re.I)
 _THIS_DAY_RE = re.compile(r"\bon this day\b", re.I)
 _TRIP_RE = re.compile(r"\b(trips?|holidays?|vacations?|weddings?|birthdays?|years?|(19|20)\d\d)\b", re.I)
 _LOCAL_SURFACES = {"", "cli", "tui", "desktop", "local"}  # Hermes agent.platform values with an in-app photo grid
@@ -188,6 +222,10 @@ _SEND_HINT = ("The user is on a messaging platform and wants photos sent. Call l
               "Do not paste the ::lumina-photos directive here.")
 _MEMORY_HINT = ("The user wants a memory video. Call lumina_make_memory with the matching filters (text/person/place/label/date_from/date_to), "
                 "or uuids from the last search, then put the returned `media` line on its own line in your reply and add one warm sentence.")
+_REDACT_HINT = ("The user wants to send or hide details on a photo of an ID or document. Call lumina_search for the document, then lumina_redact "
+                "with its uuid (preset: hotel/landlord -> hotel, airline/check-in -> airline, anyone else or unsure -> all) and present the result "
+                "as the tool says. Never send the original with lumina_export. Say in one sentence what kinds were hidden (never the values) "
+                "and that Lumina re-read the copy and 0 sensitive items remain.")
 _HINT = ("Lumina's lumina_search is the source of truth for the user's Apple Photos library: use it, not terminal or file search, "
          "for photo questions. Present what it finds without judging whether images are real or samples. The photo grid is attached "
          "automatically, so answer in one or two short sentences and do not list uuids or file paths.")
@@ -196,16 +234,25 @@ _HINT = ("Lumina's lumina_search is the source of truth for the user's Apple Pho
 def _remember(tool_name, result, session_id="", **kwargs):
     """post_tool_call: keep the latest lumina_search display for this session."""
     key = session_id  # transform_llm_output / pre_llm_call only receive session_id
-    if tool_name == "lumina_make_memory" and key:
+    if tool_name in ("lumina_make_memory", "lumina_redact") and key:
         try:
-            m = json.loads(result).get("media")
+            r = json.loads(result)
+            m = r.get("media")
         except Exception:
             return
         if m:
             _PENDING_MEDIA.pop(key, None)
             _PENDING_MEDIA[key] = m
+            _REDACT_MEDIA.discard(key)
+            if tool_name == "lumina_redact":
+                _REDACT_MEDIA.add(key)
+                if r.get("display"):
+                    _PENDING.pop(key, None)
+                    _PENDING[key] = r["display"]
             while len(_PENDING_MEDIA) > 200:
-                _PENDING_MEDIA.pop(next(iter(_PENDING_MEDIA)))
+                k = next(iter(_PENDING_MEDIA))
+                _REDACT_MEDIA.discard(k)
+                _PENDING_MEDIA.pop(k)
         return
     if tool_name not in ("lumina_search", "lumina_on_this_day", "lumina_read_text", "lumina_expiry") or not key:
         return
@@ -223,10 +270,13 @@ def _remember(tool_name, result, session_id="", **kwargs):
 def _append(response_text="", session_id="", platform="", **kwargs):
     """transform_llm_output: add the grid directive if the model forgot it (desktop only; chat apps cannot render it)."""
     m = _PENDING_MEDIA.pop(session_id, None)
-    if m and m not in response_text:
-        return f"{response_text.rstrip()}\n\n{m}"
+    red = session_id in _REDACT_MEDIA
+    _REDACT_MEDIA.discard(session_id)
+    if m and not (red and not _messaging(platform)):  # desktop shows the redact before/after view, not the bare image too
+        if m not in response_text:
+            return f"{response_text.rstrip()}\n\n{m}"
     d = _PENDING.pop(session_id, None)
-    if d and _MARKER not in response_text and not _messaging(platform):
+    if d and d.split("{")[0] + "{" not in response_text and not _messaging(platform):
         return f"{response_text.rstrip()}\n\n{d}"
     return None
 
@@ -235,6 +285,9 @@ def _route(user_message="", session_id="", platform="", **kwargs):
     """pre_llm_call: new turn drops stale state; photo-ish requests get a nudge toward lumina_search."""
     _PENDING.pop(session_id, None)
     _PENDING_MEDIA.pop(session_id, None)
+    _REDACT_MEDIA.discard(session_id)
+    if isinstance(user_message, str) and ((_HIDE_RE.search(user_message) and _IDDOC_RE.search(user_message)) or _SEND_ID_RE.search(user_message)):
+        return {"context": _HINT + " " + _REDACT_HINT}
     if (isinstance(user_message, str) and _MEMORY_RE.search(user_message) and not _THIS_DAY_RE.search(user_message)
             and (_PHOTO_RE.search(user_message) or _TRIP_RE.search(user_message))):
         return {"context": _HINT + " " + _MEMORY_HINT}
@@ -290,6 +343,20 @@ _SCHEMAS = {
                        "Only for messaging platforms; on desktop use the ::lumina-photos display.",
         "parameters": {"type": "object", "required": ["uuids"], "properties": {
             "uuids": {"type": "array", "items": _STR, "minItems": 1, "maxItems": 10},
+            "allow_original": {"type": "boolean", "description": "Only when the user explicitly asks for the unredacted original of an ID document"},
+        }},
+    },
+    "lumina_redact": {
+        "name": "lumina_redact",
+        "description": "Safe Send: black out sensitive details (document/ID numbers, date of birth, MRZ, optionally names, contacts, passwords) on a COPY of one photo, "
+                       "re-read the copy to prove nothing sensitive is left, stamp it, and return it. Use when sending or sharing a photo of an ID or document, "
+                       "or when the user asks to hide/redact/cover details. Pick `preset` from the recipient: hotel/landlord -> hotel, airline/check-in -> airline, "
+                       "anyone else or unsure -> all. Put the returned `media` line on its own line in your reply (messaging) or the `display` line (desktop); "
+                       "Lumina adds whichever fits if you forget. Tell the user in one sentence what was hidden by kind (never the values) and that Lumina "
+                       "re-read the copy and 0 sensitive items remain. If it errors, do NOT fall back to sending the original.",
+        "parameters": {"type": "object", "required": ["uuid"], "properties": {
+            "uuid": {**_STR, "description": "Photo uuid from lumina_search"},
+            "preset": {**_STR, "enum": ["hotel", "airline", "all"], "description": "Default hotel"},
         }},
     },
     "lumina_read_text": {
@@ -334,7 +401,7 @@ _SCHEMAS = {
 }
 _HANDLERS = {"lumina_search": _search, "lumina_create_album": _album, "lumina_library_info": _info,
              "lumina_on_this_day": _on_this_day, "lumina_export": _export,
-             "lumina_read_text": _read_text, "lumina_expiry": _expiry, "lumina_make_memory": _make_memory}
+             "lumina_redact": _redact, "lumina_read_text": _read_text, "lumina_expiry": _expiry, "lumina_make_memory": _make_memory}
 
 
 def register(ctx):
