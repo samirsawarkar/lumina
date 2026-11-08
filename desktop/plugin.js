@@ -75,13 +75,15 @@ function PhotosDirective({ attrs, ctx }) {
     }
   }, [idsKey, title])
 
+  const inlineIds = ids.slice(0, 12)
+  const inlineKey = inlineIds.join(',')
+
   const { data, isLoading } = useQuery({
-    queryKey: ['lumina', 'thumbs', idsKey],
-    queryFn: () => ctx.rest(`/thumbs?uuids=${idsKey}&size=s`),
+    queryKey: ['lumina', 'thumbs', inlineKey],
+    queryFn: () => ctx.rest(`/thumbs?uuids=${inlineKey}&size=s`),
     enabled: ids.length > 0
   })
 
-  const inlineIds = ids.slice(0, 12)
   const remainingCount = ids.length - 12
   const hasMore = remainingCount > 0
 
@@ -199,7 +201,15 @@ function LuminaPane({ ctx }) {
 
   const { data: thumbsData, isLoading: isThumbsLoading } = useQuery({
     queryKey: ['lumina', 'thumbs', idsKey, 'm'],
-    queryFn: () => ctx.rest(`/thumbs?uuids=${idsKey}&size=m`),
+    // backend caps /thumbs at 60 ids per request
+    queryFn: async () => {
+      const items = []
+      for (let i = 0; i < ids.length; i += 60) {
+        const r = await ctx.rest(`/thumbs?uuids=${ids.slice(i, i + 60).join(',')}&size=m`)
+        items.push(...(r?.items || []))
+      }
+      return { items }
+    },
     enabled: ids.length > 0
   })
 
