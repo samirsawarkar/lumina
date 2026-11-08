@@ -11,7 +11,7 @@ import {
   ScrollArea,
   Loader
 } from '@hermes/plugin-sdk'
-import { useEffect } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
 const UUID_RE = /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/
@@ -354,6 +354,154 @@ function LuminaPane({ ctx }) {
   })
 }
 
+const REDACT_ID_RE = /^[0-9a-f]{12}$/
+const PRESET_LABELS = { hotel: 'Hotel-safe', airline: 'Airline-safe', all: 'Everything hidden' }
+const KIND_LABELS = { number: 'ID number', dob: 'Date of birth', mrz: 'Machine code', name: 'Name', contact: 'Contact', password: 'Password' }
+
+function RedactCard({ data }) {
+  const [pos, setPos] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ? 50 : 100
+  )
+  const [isDragging, setIsDragging] = useState(false)
+  const boxRef = useRef(null)
+  const animatingRef = useRef(true)
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) return
+    let start = null, rafId
+    const step = (now) => {
+      if (!animatingRef.current) return
+      if (!start) start = now
+      const p = Math.min((now - start) / 900, 1)
+      setPos(Math.round(100 - 50 * (1 - (1 - p) * (1 - p))))
+      if (p < 1) rafId = requestAnimationFrame(step)
+    }
+    rafId = requestAnimationFrame(step)
+    return () => { animatingRef.current = false; if (rafId) cancelAnimationFrame(rafId) }
+  }, [])
+
+  const updatePos = (clientX) => {
+    const rect = boxRef.current?.getBoundingClientRect()
+    if (rect && rect.width > 0) setPos(Math.round((Math.max(0, Math.min(rect.width, clientX - rect.left)) / rect.width) * 100))
+  }
+  const onPointerDown = (e) => {
+    animatingRef.current = false
+    e.currentTarget.setPointerCapture(e.pointerId)
+    setIsDragging(true)
+    updatePos(e.clientX)
+  }
+
+  return jsxs('div', {
+    className: 'flex flex-col gap-2.5 my-2 p-3 rounded-lg select-none',
+    style: { maxWidth: '560px', backgroundColor: 'var(--ui-bg-secondary)', border: '1px solid var(--ui-stroke-secondary)' },
+    children: [
+      jsxs('div', {
+        className: 'flex items-center gap-2 text-xs',
+        children: [
+          jsxs('div', {
+            className: 'flex items-center gap-1.5 font-semibold shrink-0',
+            style: { color: 'var(--ui-text-primary)' },
+            children: [jsx('span', { children: '\uD83D\uDEE1\uFE0F' }), jsx('span', { children: 'Lumina Guardian' })]
+          }),
+          data.document ? jsx('span', { className: 'truncate font-medium', style: { color: 'var(--ui-text-secondary)' }, children: `\u00b7 ${data.document}` }) : null,
+          jsx('span', {
+            className: 'ml-auto text-[11px] px-2 py-0.5 rounded-full shrink-0 font-medium',
+            style: { backgroundColor: 'var(--ui-bg-tertiary)', border: '1px solid var(--ui-stroke-tertiary)', color: 'var(--ui-text-secondary)' },
+            children: PRESET_LABELS[data.preset] || data.preset || 'Protected'
+          })
+        ].filter(Boolean)
+      }),
+      jsxs('div', {
+        ref: boxRef,
+        role: 'slider',
+        tabIndex: 0,
+        'aria-label': 'Redaction comparison',
+        'aria-valuenow': Math.round(pos),
+        'aria-valuemin': 0,
+        'aria-valuemax': 100,
+        onPointerDown,
+        onPointerMove: (e) => { if (isDragging || e.buttons === 1) updatePos(e.clientX) },
+        onPointerUp: () => setIsDragging(false),
+        onPointerCancel: () => setIsDragging(false),
+        onKeyDown: (e) => {
+          if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+            e.preventDefault()
+            animatingRef.current = false
+            setPos((p) => Math.max(0, Math.min(100, p + (e.key === 'ArrowRight' ? 5 : -5))))
+          }
+        },
+        className: 'relative w-full overflow-hidden rounded outline-none focus-visible:ring-1',
+        style: { aspectRatio: '16 / 10', backgroundColor: 'var(--ui-bg-tertiary)', border: '1px solid var(--ui-stroke-tertiary)', cursor: 'ew-resize', touchAction: 'none' },
+        children: [
+          jsx('img', { src: data.before, alt: 'Original', className: 'absolute inset-0 w-full h-full object-contain pointer-events-none select-none' }),
+          jsx('img', { src: data.after, alt: 'Safe copy', className: 'absolute inset-0 w-full h-full object-contain pointer-events-none select-none', style: { clipPath: `inset(0 0 0 ${pos}%)` } }),
+          jsx('span', { className: 'absolute top-2 left-2 text-[10px] font-semibold px-1.5 py-0.5 rounded pointer-events-none select-none', style: { backgroundColor: 'var(--ui-bg-primary)', color: 'var(--ui-text-primary)', border: '1px solid var(--ui-stroke-secondary)' }, children: 'Original' }),
+          jsx('span', { className: 'absolute top-2 right-2 text-[10px] font-semibold px-1.5 py-0.5 rounded pointer-events-none select-none', style: { backgroundColor: 'var(--ui-bg-primary)', color: 'var(--ui-text-primary)', border: '1px solid var(--ui-stroke-secondary)' }, children: 'Safe copy' }),
+          jsxs('div', {
+            className: 'absolute top-0 bottom-0 pointer-events-none',
+            style: { left: `${pos}%`, width: '2px', transform: 'translateX(-50%)', backgroundColor: '#fff', boxShadow: '0 0 2px rgba(0,0,0,0.5)' },
+            children: [
+              jsx('div', {
+                className: 'absolute top-1/2 -translate-y-1/2 -translate-x-1/2 rounded-full flex items-center justify-center shadow',
+                style: { left: '50%', width: '22px', height: '22px', backgroundColor: 'var(--ui-bg-primary)', border: '1px solid var(--ui-stroke-secondary)', color: 'var(--ui-text-primary)' },
+                children: jsx('span', { className: 'text-[11px] leading-none', children: '\u2194' })
+              })
+            ]
+          })
+        ]
+      }),
+      data.verified && data.remaining === 0
+        ? jsxs('div', {
+            className: 'flex flex-wrap items-center gap-1.5 text-xs',
+            style: { color: 'var(--ui-text-primary)' },
+            children: [
+              jsx('span', { className: 'font-bold', children: '\u2713' }),
+              jsx('span', { children: `Re-read on-device: ${data.found} hidden, 0 remain` }),
+              Array.isArray(data.kinds) && data.kinds.length > 0
+                ? jsx('div', {
+                    className: 'flex flex-wrap items-center gap-1 ml-auto',
+                    children: data.kinds.map((k) =>
+                      jsx('span', { key: k, className: 'text-[10px] px-1.5 py-0.5 rounded font-medium', style: { backgroundColor: 'var(--ui-bg-tertiary)', border: '1px solid var(--ui-stroke-tertiary)', color: 'var(--ui-text-secondary)' }, children: KIND_LABELS[k] || k })
+                    )
+                  })
+                : null
+            ].filter(Boolean)
+          })
+        : jsx('div', { className: 'flex items-center gap-1.5 text-xs font-medium', style: { color: 'var(--ui-text-primary)' }, children: '\u26A0 Not verified \u2014 do not send' })
+    ]
+  })
+}
+
+function RedactDirective({ attrs, ctx }) {
+  const rawId = attrs && typeof attrs === 'object' ? attrs.id : null
+  const id = typeof rawId === 'string' && REDACT_ID_RE.test(rawId.trim()) ? rawId.trim() : null
+
+  const { data, isLoading, isError, error } = useQuery({
+    queryKey: ['lumina', 'redact', id],
+    queryFn: () => ctx.rest('/redact?id=' + id),
+    enabled: Boolean(id)
+  })
+
+  if (!id) return null
+
+  if (isLoading) {
+    return jsx('div', {
+      className: 'w-full rounded-lg animate-pulse my-2',
+      style: { maxWidth: '560px', aspectRatio: '16 / 10', backgroundColor: 'var(--ui-bg-secondary)', border: '1px solid var(--ui-stroke-secondary)' }
+    })
+  }
+
+  if (isError || !data || data.status === 404 || /404/.test(String(error?.message || error?.status || ''))) {
+    return jsx('div', {
+      className: 'text-xs my-2 px-1',
+      style: { color: 'var(--ui-text-secondary)' },
+      children: 'This safe copy has expired.'
+    })
+  }
+
+  return jsx(RedactCard, { data })
+}
+
 export default {
   id: 'lumina',
   name: 'Lumina',
@@ -364,6 +512,15 @@ export default {
       data: {
         name: 'lumina-photos',
         render: (props) => jsx(PhotosDirective, { ...props, ctx })
+      }
+    })
+
+    ctx.register({
+      id: 'redact',
+      area: TRANSCRIPT_DIRECTIVE_AREA,
+      data: {
+        name: 'lumina-redact',
+        render: (props) => jsx(RedactDirective, { ...props, ctx })
       }
     })
 
