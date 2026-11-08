@@ -157,3 +157,10 @@ def test_route_and_register():
     props = c.tools["lumina_redact"]["schema"]["parameters"]
     assert props["required"] == ["uuid"] and props["properties"]["preset"]["enum"] == ["hotel", "airline", "all"]
     assert "allow_original" in c.tools["lumina_export"]["schema"]["parameters"]["properties"]
+
+
+def test_safe_name_never_uses_a_person_name():
+    from lumina import redact
+    assert redact.safe_name(["ALEX SAMPLE", "DOB: 01/02/1990", "ID: D1234-5678"]) == "Document"
+    assert redact.safe_name(["IRONWORKS GYM", "MEMBER: ALEX SAMPLE"]) == "Gym"
+    assert redact.safe_name(["PASSPORT", "Surname: SAMPLE"]) == "Passport"

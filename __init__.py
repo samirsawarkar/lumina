@@ -276,7 +276,7 @@ def _tidy_redact(text, media, display, messaging):
     for line in text.splitlines():
         s = line.strip()
         if s.startswith("MEDIA:"):
-            if messaging and s not in keep:
+            if messaging and s == media and s not in keep:  # only the verified safe copy, never another image the model pasted
                 keep.append(s)
             continue
         if s.startswith("::lumina-photos{") or (messaging and s.startswith("::lumina-redact{")):

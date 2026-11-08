@@ -406,3 +406,11 @@ def test_safe_send_reply_shows_only_the_safe_copy():
         assert out.count(want) == 1 and all(g not in out for g in gone), (plat, out)
     lumina._remember("lumina_redact", json.dumps({"media": M, "display": D}), session_id="s")
     assert lumina._append("Safe copy ready.", session_id="s", platform="desktop").endswith(D)
+
+
+def test_safe_send_never_forwards_another_media_line():
+    M = "MEDIA:/h/plugin-data/x/redacted/abcdef012345.jpg"
+    lumina._PENDING_MEDIA.clear()
+    lumina._remember("lumina_redact", json.dumps({"media": M, "display": '::lumina-redact{id="abcdef012345"}'}), session_id="s")
+    out = lumina._append(f"MEDIA:/h/plugin-data/x/exports/ORIG.jpg\n{M}", session_id="s", platform="telegram")
+    assert "ORIG" not in out and out.count(M) == 1

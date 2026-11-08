@@ -24,3 +24,4 @@ python_dependencies:
   - "osxphotos>=0.70,<1"
   - "photoscript>=0.4,<1"
   - "Pillow>=10,<14"
+  - "pyobjc-framework-Vision>=10,<14"  # Safe Send text boxes; already pulled in by osxphotos

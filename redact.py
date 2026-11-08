@@ -275,7 +275,18 @@ def looks_like_id(texts: list[str]) -> bool:
     return any(k in PRESETS["hotel"] for _, k, _, _ in classify(texts))
 
 
+_DOC_TYPE_RE = re.compile(r"\b(passport|driv\w* licen[cs]e|licen[cs]e|identity card|id card|residence permit|visa|boarding pass|"
+                          r"vaccination (?:record|card)|membership|library card|gym|insurance card|health card|ticket|card)\b", re.I)
+_ORG_RE = re.compile(r"\b(gym|bank|library|club|clinic|hospital|airline|airways|rail|university|school|insurance|studio|ltd|inc|llc)\b", re.I)
+
+
 def safe_name(texts: list[str]) -> str:
     """Document title from lines that contain nothing sensitive (a name line must never become the title)."""
+    # Only a known document-type word may become the title: a free first line can be a person's name.
+    joined = " ".join(texts)
+    m = _DOC_TYPE_RE.search(joined)
+    if m:
+        return m.group(0).title()
     bad = {i for i, *_ in classify(texts)}
-    return photos.document_name([t for i, t in enumerate(texts) if i not in bad])
+    rest = [t for i, t in enumerate(texts) if i not in bad and _ORG_RE.search(t)]
+    return photos.document_name(rest) if rest else "Document"
