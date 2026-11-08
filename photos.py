@@ -87,8 +87,8 @@ def photo_dict(p) -> dict:
         "date": p.date.isoformat() if p.date else None,
         "title": p.title,
         "place": p.place.name if p.place else None,
-        "persons": [x for x in p.persons if x != "_UNKNOWN_"],
-        "labels": list(p.labels)[:8],
+        "persons": [x for x in p.persons or [] if x != "_UNKNOWN_"],
+        "labels": list(p.labels or [])[:8],
         "text_snippet": _snippet(p),
         "is_local": _is_local(p),
         "is_screenshot": bool(p.screenshot),
@@ -131,15 +131,15 @@ def search(db, text=None, person=None, place=None, label=None, date_from=None, d
             continue
         if media == "screenshot" and not p.screenshot:
             continue
-        if person and not any(low(person) in low(x) for x in p.persons):
+        if person and not any(low(person) in low(x) for x in p.persons or []):
             continue
         if place and low(place) not in low(p.place.name if p.place else ""):
             continue
-        if label and not any(low(label) in low(x) for x in p.labels):
+        if label and not any(low(label) in low(x) for x in p.labels or []):
             continue
         if text:
             t = low(text)
-            hay = [p.title, p.description, p.place.name if p.place else "", *p.labels, *p.keywords]
+            hay = [p.title, p.description, p.place.name if p.place else "", *(p.labels or []), *(p.keywords or [])]
             if not any(t in low(h) for h in hay):
                 try:
                     if not any(t in low(s) for s, _ in p.detected_text()):
@@ -197,7 +197,7 @@ SIZES = {"s": 256, "m": 768}
 def thumb_data_url(p, size: str = "s") -> str | None:
     """Biggest on-disk derivative, else local original; downscaled with Pillow if available."""
     side = SIZES.get(size, 256)
-    derived = [d for d in (p.path_derivatives or []) if os.path.exists(d)]
+    derived = sorted((d for d in (p.path_derivatives or []) if os.path.exists(d)), key=os.path.getsize, reverse=True)
     src = derived[0] if derived else (p.path if p.path and os.path.exists(p.path) else None)
     if not src or p.ismovie and not derived:
         return None

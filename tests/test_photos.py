@@ -50,10 +50,9 @@ def test_create_album_validates():
 
 
 def test_thumbnail_data_url(db):
-    # only photos with a local file can yield a thumbnail; fixtures are tiny so this may be None-only
     urls = [photos.thumb_data_url(p, "s") for p in db.photos()]
+    assert any(u and u.startswith("data:image/jpeg;base64,") for u in urls)
     assert all(u is None or u.startswith("data:image/jpeg;base64,") for u in urls)
-
 
 def test_errors_never_leak_paths(monkeypatch, tmp_path):
     assert "/Users" not in photos._classify(RuntimeError("bad /Users/x/Photos.sqlite")).message
@@ -74,3 +73,22 @@ def test_errors_never_leak_paths(monkeypatch, tmp_path):
     with pytest.raises(photos.LuminaError) as e:
         photos.create_album("a", ["U"])
     assert "/Users" not in e.value.message
+
+
+def test_search_odd_photos_and_detected_text():
+    import datetime as dt
+    from types import SimpleNamespace as NS
+
+    def fake(uuid, **kw):
+        d = dict(uuid=uuid, date=dt.datetime(2024, 1, 1), title=None, description=None, place=None,
+                 persons=None, labels=None, keywords=None, hidden=False, intrash=False, ismovie=False,
+                 screenshot=False, path=None, path_derivatives=None, detected_text=lambda: [])
+        return NS(**{**d, **kw})
+
+    passport = fake("P", detected_text=lambda: [("PASSPORT No 123", 0.9)])
+    odd = fake("O")  # every optional field None
+    db = NS(photos=lambda movies=True: [odd, passport])
+    r = photos.search(db, text="passport")
+    assert [x["uuid"] for x in r["photos"]] == ["P"] and r["photos"][0]["text_snippet"] == "PASSPORT No 123"
+    assert photos.search(db, person="x", label="y")["total_matches"] == 0
+    assert photos.photo_dict(odd)["labels"] == []
