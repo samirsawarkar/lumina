@@ -73,8 +73,8 @@ def test_search_display_line(monkeypatch):
 D = '::lumina-photos{ids="A" title="x"}'
 
 
-def _seen(sid="s", task=""):
-    lumina._remember("lumina_search", json.dumps({"display": D}), session_id=sid, task_id=task)
+def _seen(sid="s"):
+    lumina._remember("lumina_search", json.dumps({"display": D}), session_id=sid, task_id="task-ignored")
 
 
 def test_append_once_when_missing():
@@ -94,10 +94,12 @@ def test_append_skipped_when_present_or_unrelated():
     assert lumina._append("hi", session_id="t") is None
 
 
-def test_remember_falls_back_to_task_id_and_is_bounded():
+def test_remember_is_keyed_by_session_and_bounded():
     lumina._PENDING.clear()
-    _seen(sid="", task="task1")
-    assert "task1" in lumina._PENDING
+    _seen(sid="")  # no session id: nothing stored (task_id is never consumed by later hooks)
+    assert not lumina._PENDING
+    _seen(sid="abc")
+    assert lumina._append("x", session_id="abc") == f"x\n\n{D}"  # stored AND retrieved with the same key
     for i in range(300):
         _seen(sid=f"s{i}")
     assert len(lumina._PENDING) == 200

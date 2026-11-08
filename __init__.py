@@ -133,9 +133,9 @@ _HINT = ("Lumina's lumina_search is the source of truth for the user's Apple Pho
          "automatically, so answer in one or two short sentences and do not list uuids or file paths.")
 
 
-def _remember(tool_name, result, session_id="", task_id="", **kwargs):
+def _remember(tool_name, result, session_id="", **kwargs):
     """post_tool_call: keep the latest lumina_search display for this session."""
-    key = session_id or task_id
+    key = session_id  # transform_llm_output / pre_llm_call only receive session_id
     if tool_name not in ("lumina_search", "lumina_on_this_day") or not key:
         return
     try:
