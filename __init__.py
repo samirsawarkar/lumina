@@ -241,7 +241,8 @@ _REDACT_HINT = ("The user wants to send or hide details on a photo of an ID or d
                 "and that Lumina re-read the copy and 0 sensitive items remain. Do not say where the copy is stored.")
 _PRIVACY_HINT = ("The user wants a privacy check-up. Call lumina_privacy_check (no arguments). Summarise the counts per kind in one or two plain "
                  "sentences (say if `partial` is true that only the newest photos were checked) and never print any values. Say everything was "
-                 "read on this Mac. Name each kind by its group label (Passports, Payment cards, Passwords, ID documents). Then offer two next steps "
+                 "read on this Mac. Name each kind in plain words with the right singular or plural (1 passport, 2 payment cards, 1 password, "
+                 "3 ID documents). Do not claim every photo was read: if the result has a `note`, pass it on in one short sentence. Then offer two next steps "
                  "in plain words, never naming tools: safe copies with the sensitive parts hidden (lumina_redact, one photo at a time) or "
                  "collecting them in one album (lumina_create_album with the result's all_uuids).")
 _HINT = ("Lumina's lumina_search is the source of truth for the user's Apple Photos library: use it, not terminal or file search, "
