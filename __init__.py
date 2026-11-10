@@ -234,10 +234,11 @@ _SEND_HINT = ("The user is on a messaging platform and wants photos sent. Call l
               "Do not paste the ::lumina-photos directive here.")
 _MEMORY_HINT = ("The user wants a memory video. Call lumina_make_memory with the matching filters (text/person/place/label/date_from/date_to), "
                 "or uuids from the last search, then put the returned `media` line on its own line in your reply and add one warm sentence.")
-_REDACT_HINT = ("The user wants to send or hide details on a photo of an ID or document. Call lumina_search for the document, then lumina_redact "
+_REDACT_HINT = ("The user wants to send or hide details on a photo of an ID or document. If the user's message names an image file path, call lumina_redact with "
+                "path=<that file> and do NOT search Photos; otherwise call lumina_search for the document, then lumina_redact "
                 "with its uuid (preset: hotel/landlord -> hotel, airline/check-in -> airline, anyone else or unsure -> all) and present the result "
                 "as the tool says. Never send the original with lumina_export. Say in one sentence what kinds were hidden (never the values) "
-                "and that Lumina re-read the copy and 0 sensitive items remain.")
+                "and that Lumina re-read the copy and 0 sensitive items remain. Do not say where the copy is stored.")
 _PRIVACY_HINT = ("The user wants a privacy check-up. Call lumina_privacy_check (no arguments). Summarise the counts per kind in one or two plain "
                  "sentences (say if `partial` is true that only the newest photos were checked) and never print any values. Say everything was "
                  "read on this Mac. Name each kind by its group label (Passports, Payment cards, Passwords, ID documents). Then offer two next steps "
@@ -298,7 +299,8 @@ def _tidy_redact(text, media, display, messaging):
             continue
         if s.startswith("::lumina-photos{") or (messaging and s.startswith("::lumina-redact{")):
             continue
-        keep.append(_DATA_PATH_RE.sub("the safe copy", line))
+        if (line := _DATA_PATH_RE.sub("the safe copy", line)).strip() != "the safe copy":
+            keep.append(line)
     out = "\n".join(keep).rstrip()
     if messaging and media and media not in out:
         out += f"\n\n{media}"

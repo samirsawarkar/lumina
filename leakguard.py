@@ -1,4 +1,4 @@
-"""Leak Guard: no tool or reply sends a raw image of an ID document off this Mac, whichever plugin tries."""
+"""Leak Guard: catches the common routes by which any tool or reply could send a raw image of an ID document off this Mac."""
 
 from __future__ import annotations
 
@@ -16,8 +16,12 @@ _EXT = r"\.(?:jpe?g|png|heic|heif|tiff?|webp|bmp|gif)"
 _QUOTED = re.compile(r"""(["'])(?:[\w.-]*[=@]+)?((?:~|/)[^"'\n]*?""" + _EXT + r")\1", re.I)
 _BARE = re.compile(r"""(?<![\w.])(?:~|/)(?:\\ |[^\s"'<>|;&])*?""" + _EXT + r"(?![\w])", re.I)
 _MEDIA = re.compile(r"MEDIA:\s*((?:~|/).*?" + _EXT + r")\s*$", re.I | re.M)  # the rest of a MEDIA: line is the path, spaces included
-# ponytail: relative paths (cd dir && curl -F f=@a.jpg) and unquoted paths with spaces are not seen; resolve against the shell cwd if needed
+_REL = re.compile(r"""(?:(?<=[\s"'=@:])|^)([\w.+\-/]+""" + _EXT + r")(?![\w])", re.I | re.M)
+_CD = re.compile(r"""\bcd\s+("[^"]+"|'[^']+'|\S+)""")
+# ponytail: relative names are resolved (terminal / execute_code only) against workdir, each `cd <dir>` and the process cwd. Not seen: unquoted
+# paths with spaces, relative names with spaces, chained relative cds, other env vars, globs (*.jpg), paths built in code or shell variables
 _NAME_RE = re.compile(r"send|message|mail|upload|post|share|slack|telegram|discord|whatsapp|signal|tweet", re.I)
+# base64 and xxd stay on purpose: their output puts the whole image into the model's context, which leaves this Mac
 _NET_RE = re.compile(r"\b(curl|wget|scp|sftp|rsync|ftp|nc|ncat|ssh|mail|mailx|sendmail|mutt|osascript|rclone|aws|gsutil|gh|base64|xxd|"
                      r"requests|urllib|httpx|smtplib|fetch)\b", re.I)
 _RAW_RE = re.compile(r"\b(original|unredacted|un-redacted|as is|anyway|without (?:hiding|redacting|blurring|covering))\b", re.I)
@@ -52,12 +56,19 @@ def _strings(v, out, n=0):
     return out
 
 
-def image_paths(args) -> list[Path]:
-    """Existing image files (<= 30 MB, at most 4) named anywhere in a tool call's string arguments."""
-    found = []
+def image_paths(args, rel=False) -> list[Path]:
+    """Existing image files (<= 30 MB, at most 4) named anywhere in a tool call's string arguments; `rel` also resolves relative names."""
+    found, home = [], os.path.expanduser("~")
+    wd = args.get("workdir") if isinstance(args, dict) and isinstance(args.get("workdir"), str) else ""
     for s in _strings(args, [])[:200]:
-        s = s[:_MAX_TEXT]
-        for raw in [m.group(2) for m in _QUOTED.finditer(s)] + _MEDIA.findall(s) + [m.group(0).replace("\\ ", " ") for m in _BARE.finditer(s)]:
+        s = s[:_MAX_TEXT].replace("${HOME}", home).replace("$HOME", home)
+        raws = [m.group(2) for m in _QUOTED.finditer(s)] + _MEDIA.findall(s) + [m.group(0).replace("\\ ", " ") for m in _BARE.finditer(s)]
+        if rel:
+            base = Path(wd).expanduser() if wd else Path.cwd()
+            bases = [base] + [base / d.strip("\"'") for d in _CD.findall(s)] + [Path.cwd()]
+            bases += [Path(d.strip("\"'")).expanduser() for d in _CD.findall(s)]
+            raws += [str(b / r) for r in _REL.findall(s) for b in bases]
+        for raw in raws:
             try:
                 if (p := redact.image_file(raw)) and p not in found:
                     found.append(p)
@@ -94,7 +105,9 @@ def sensitive(p: Path):
                 r = None
             else:
                 texts = [l.text for l in redact.ocr_boxes(p)]
-                r = (re.sub(r"[^\w ]", "", redact.safe_name(texts))[:40].strip() or "an ID document") if redact.looks_like_id(texts) else None
+                # fixed vocabulary only: never a line of recognised text, which can be a person's name
+                m = redact._DOC_TYPE_RE.search(" ".join(texts))
+                r = ((m.group(0).title() if m else "ID document") if redact.looks_like_id(texts) else None)
             if len(_CACHE) >= 300:
                 _CACHE.pop(next(iter(_CACHE)))
             _CACHE[key] = r
@@ -109,10 +122,10 @@ def check(tool_name, args, session_id=""):
     try:
         if _off(session_id) or not outbound(tool_name, args):
             return None
-        for p in image_paths(args):
+        for p in image_paths(args, tool_name in ("terminal", "execute_code")):
             if name := sensitive(p):
                 return {"action": "block", "message": (
-                    f"Lumina Leak Guard stopped this call: an image in it looks like a {name} (an ID document). Nothing left this Mac. "
+                    f"Lumina Leak Guard stopped this call: an image in it looks like an ID document ({name}). Nothing left this Mac. "
                     "Tell the user, and offer a safe copy with the sensitive parts hidden: call lumina_redact with path=<that image file> (preset hotel, airline or all by recipient) and send its result instead. Only if the user says in their own words "
                     "that they want the original (for example \"send the original\") is the block lifted.")}
     except Exception as e:
