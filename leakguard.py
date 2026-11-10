@@ -8,7 +8,7 @@ import os
 import re
 from pathlib import Path
 
-from . import redact
+from . import privacy, redact
 
 log = logging.getLogger(__name__)
 
@@ -83,7 +83,12 @@ def outbound(tool_name, args) -> bool:
         return False
     if n.startswith("browser_") or _NAME_RE.search(n):
         return True
-    return n in ("terminal", "execute_code") and bool(_NET_RE.search(" ".join(_strings(args, []))))
+    if n not in ("terminal", "execute_code"):
+        return False
+    text = " ".join(_strings(args, []))
+    for rx in (_QUOTED, _MEDIA, _BARE, _REL):  # a folder called Mail is not a mail command
+        text = rx.sub(" ", text)
+    return bool(_NET_RE.search(text))
 
 
 def _safe_copy(p: Path) -> bool:
@@ -105,9 +110,8 @@ def sensitive(p: Path):
                 r = None
             else:
                 texts = [l.text for l in redact.ocr_boxes(p)]
-                # fixed vocabulary only: never a line of recognised text, which can be a person's name
-                m = redact._DOC_TYPE_RE.search(" ".join(texts))
-                r = ((m.group(0).title() if m else "ID document") if redact.looks_like_id(texts) else None)
+                k = privacy.kind_of(texts)  # precise: passwords (wifi signs), receipts, serial numbers are not blocked
+                r = privacy._document(k, texts) if k in ("passport", "card", "id") else None  # fixed vocabulary, never recognised text
             if len(_CACHE) >= 300:
                 _CACHE.pop(next(iter(_CACHE)))
             _CACHE[key] = r

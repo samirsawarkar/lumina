@@ -88,8 +88,19 @@ def redact_view(id: str = ""):
         try:
             f = Path(meta["path"])
             if f.suffix.lower() in (".jpg", ".jpeg", ".png", ".heic", ".heif", ".tif", ".tiff", ".webp", ".bmp", ".gif") and f.is_file() and f.stat().st_size <= 30_000_000:  # same rule as redact.image_file
-                with Image.open(f) as src:
-                    src = ImageOps.exif_transpose(src).convert("RGB")
+                try:
+                    with Image.open(f) as src:
+                        src = ImageOps.exif_transpose(src).convert("RGB")
+                except Exception:  # e.g. HEIC: let macOS convert it
+                    import shutil, subprocess, tempfile
+
+                    t = tempfile.mkdtemp(dir=photos._data_dir())
+                    try:
+                        subprocess.run(["sips", "-s", "format", "jpeg", str(f), "--out", t + "/c.jpg"], check=True, capture_output=True, timeout=60)
+                        with Image.open(t + "/c.jpg") as src:
+                            src = ImageOps.exif_transpose(src).convert("RGB")
+                    finally:
+                        shutil.rmtree(t, ignore_errors=True)
                 src.thumbnail((1024, 1024))
                 buf2 = io.BytesIO()
                 src.save(buf2, "JPEG", quality=85)

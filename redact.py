@@ -9,6 +9,7 @@ import json
 import logging
 import re
 import shutil
+import subprocess
 import tempfile
 import time
 import uuid as _uuid
@@ -71,16 +72,30 @@ def _px(bb, w, h):
     return (x * w, (1 - y - bh) * h, (x + bw) * w, (1 - y) * h)
 
 
+def _pixel_size(path):
+    """(w, h) of the image as Vision sees it (EXIF orientation applied), via ImageIO so HEIC works; Pillow as fallback."""
+    try:
+        import Quartz
+        from Foundation import NSURL
+
+        pr = Quartz.CGImageSourceCopyPropertiesAtIndex(Quartz.CGImageSourceCreateWithURL(NSURL.fileURLWithPath_(str(path)), None), 0, None)
+        w, h = int(pr["PixelWidth"]), int(pr["PixelHeight"])
+        return (h, w) if int(pr.get("Orientation", 1)) in (5, 6, 7, 8) else (w, h)
+    except Exception:
+        from PIL import Image
+
+        with Image.open(path) as im:
+            return im.size
+
+
 def ocr_boxes(path) -> list[Line]:
     """Apple Vision OCR (accurate) with pixel boxes. Imports Vision lazily; raises LuminaError when unavailable."""
     try:
         import Vision
         from Foundation import NSURL
-        from PIL import Image
     except ImportError:
         raise LuminaError("redact_unavailable", "On-device text recognition is not available here.") from None
-    with Image.open(path) as im:
-        w, h = im.size
+    w, h = _pixel_size(path)
     req = Vision.VNRecognizeTextRequest.alloc().init()
     req.setRecognitionLevel_(0)
     req.setUsesLanguageCorrection_(False)
@@ -214,7 +229,14 @@ def _make(src, out: Path, preset: str) -> dict:
 
     work = Path(tempfile.mkdtemp(prefix="red-", dir=photos._data_dir()))
     try:
-        base = ImageOps.exif_transpose(Image.open(src)).convert("RGB")
+        try:
+            img = Image.open(src)
+            img.load()
+        except Exception:  # e.g. HEIC: Pillow cannot read it, macOS can
+            conv = work / "conv.jpg"
+            subprocess.run(["sips", "-s", "format", "jpeg", str(src), "--out", str(conv)], check=True, capture_output=True, timeout=60)
+            img = Image.open(conv)
+        base = ImageOps.exif_transpose(img).convert("RGB")
         base.thumbnail((photos.EXPORT_MAX_SIDE,) * 2)
         flat = work / "in.png"
         base.save(flat)

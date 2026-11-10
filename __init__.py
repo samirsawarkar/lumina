@@ -179,7 +179,7 @@ def _guard(tool_name, args, **kwargs):
         a = args or {}
         u, f = a.get("uuid"), a.get("path")
         one = (isinstance(u, str) and photos.UUID_RE.fullmatch(u) is not None and f is None) or (u is None and isinstance(f, str) and redact.image_file(f) is not None)
-        if not one or a.get("preset", "hotel") not in redact.PRESETS:
+        if not one or (a.get("preset") or "hotel") not in redact.PRESETS:
             return {"action": "block", "message": "lumina_redact needs exactly one of a photo uuid from a previous lumina_search or the path of an existing image file, and preset hotel, airline or all."}
         return None
     if tool_name == "lumina_read_text":
