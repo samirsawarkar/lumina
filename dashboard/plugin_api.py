@@ -72,7 +72,7 @@ def redact_view(id: str = ""):
              photos._data_dir() / "redacted")
     try:
         meta = json.loads((d / f"{id}.json").read_text())
-        from PIL import Image
+        from PIL import Image, ImageOps
 
         im = Image.open(d / f"{id}.jpg").convert("RGB")
     except (OSError, ValueError):
@@ -80,9 +80,24 @@ def redact_view(id: str = ""):
     im.thumbnail((1024, 1024))
     buf = io.BytesIO()
     im.save(buf, "JPEG", quality=85)
-    p = _db().get_photo(meta["uuid"])
-    return {**{k: meta[k] for k in ("id", "uuid", "document", "preset", "found", "remaining", "verified", "kinds")},
-            "before": photos.thumb_data_url(p, "m") if p is not None else None,
+    before = None
+    if meta.get("uuid"):
+        p = _db().get_photo(meta["uuid"])
+        before = photos.thumb_data_url(p, "m") if p is not None else None
+    elif meta.get("path"):  # source file of a path-based copy; the path itself is never returned
+        try:
+            f = Path(meta["path"])
+            if f.stat().st_size <= 30_000_000:
+                with Image.open(f) as src:
+                    src = ImageOps.exif_transpose(src).convert("RGB")
+                src.thumbnail((1024, 1024))
+                buf2 = io.BytesIO()
+                src.save(buf2, "JPEG", quality=85)
+                before = "data:image/jpeg;base64," + base64.b64encode(buf2.getvalue()).decode()
+        except Exception:
+            before = None
+    return {**{k: meta.get(k) for k in ("id", "uuid", "document", "preset", "found", "remaining", "verified", "kinds")},
+            "before": before,
             "after": "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()}
 
 

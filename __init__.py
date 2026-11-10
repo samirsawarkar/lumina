@@ -9,7 +9,7 @@ import logging
 import re
 from pathlib import Path
 
-from . import photos, privacy, redact
+from . import leakguard, photos, privacy, redact
 
 log = logging.getLogger(__name__)
 
@@ -145,7 +145,7 @@ def _info(_a):
 
 
 def _redact(a):
-    return redact.redact(photos.get_db(), a.get("uuid"), a.get("preset") or "hotel")
+    return redact.redact(None if a.get("path") else photos.get_db(), a.get("uuid"), a.get("preset") or "hotel", a.get("path"))
 
 
 def _id_guard(uuids):
@@ -167,7 +167,9 @@ def _id_guard(uuids):
 
 
 def _guard(tool_name, args, **kwargs):
-    """Veto malformed album / export requests before they reach Apple Photos or the disk."""
+    """Veto malformed album / export requests before they reach Apple Photos or the disk; Leak Guard for every other tool."""
+    if not (tool_name or "").startswith("lumina_"):
+        return leakguard.check(tool_name, args, kwargs.get("session_id", ""))
     if tool_name == "lumina_export":
         u = (args or {}).get("uuids")
         if not isinstance(u, list) or not 0 < len(u) <= 10 or not all(isinstance(x, str) and photos.UUID_RE.fullmatch(x) for x in u):
@@ -175,8 +177,10 @@ def _guard(tool_name, args, **kwargs):
         return None if (args or {}).get("allow_original") is True else _id_guard(list(dict.fromkeys(u)))
     if tool_name == "lumina_redact":
         a = args or {}
-        if not isinstance(a.get("uuid"), str) or not photos.UUID_RE.fullmatch(a["uuid"]) or a.get("preset", "hotel") not in redact.PRESETS:
-            return {"action": "block", "message": "lumina_redact needs one photo uuid from a previous lumina_search and preset hotel, airline or all."}
+        u, f = a.get("uuid"), a.get("path")
+        one = (isinstance(u, str) and photos.UUID_RE.fullmatch(u) is not None and f is None) or (u is None and isinstance(f, str) and redact.image_file(f) is not None)
+        if not one or a.get("preset", "hotel") not in redact.PRESETS:
+            return {"action": "block", "message": "lumina_redact needs exactly one of a photo uuid from a previous lumina_search or the path of an existing image file, and preset hotel, airline or all."}
         return None
     if tool_name == "lumina_read_text":
         u = (args or {}).get("uuids")
@@ -303,6 +307,12 @@ def _tidy_redact(text, media, display, messaging):
 
 
 def _append(response_text="", session_id="", platform="", **kwargs):
+    """transform_llm_output: Leak Guard first (messaging), then the grid / redact handling."""
+    held = _messaging(platform) and leakguard.scrub(response_text, session_id)
+    return _append_grid(held or response_text, session_id, platform, **kwargs) or held or None
+
+
+def _append_grid(response_text="", session_id="", platform="", **kwargs):
     """transform_llm_output: add the grid directive if the model forgot it (desktop only; chat apps cannot render it)."""
     m = _PENDING_MEDIA.pop(session_id, None)
     red = session_id in _REDACT_MEDIA
@@ -323,6 +333,7 @@ def _route(user_message="", session_id="", platform="", **kwargs):
     _PENDING.pop(session_id, None)
     _PENDING_MEDIA.pop(session_id, None)
     _REDACT_MEDIA.discard(session_id)
+    leakguard.note_turn(session_id, user_message)
     if isinstance(user_message, str) and ((_HIDE_RE.search(user_message) and _IDDOC_RE.search(user_message)) or _SEND_ID_RE.search(user_message)):
         return {"context": _HINT + " " + _REDACT_HINT}
     if (isinstance(user_message, str) and _MEMORY_RE.search(user_message) and not _THIS_DAY_RE.search(user_message)
@@ -392,9 +403,11 @@ _SCHEMAS = {
                        "or when the user asks to hide/redact/cover details. Pick `preset` from the recipient: hotel/landlord -> hotel, airline/check-in -> airline, "
                        "anyone else or unsure -> all. Put the returned `media` line on its own line in your reply (messaging) or the `display` line (desktop); "
                        "Lumina adds whichever fits if you forget. Tell the user in one sentence what was hidden by kind (never the values) and that Lumina "
-                       "re-read the copy and 0 sensitive items remain. If it errors, do NOT fall back to sending the original.",
-        "parameters": {"type": "object", "required": ["uuid"], "properties": {
+                       "re-read the copy and 0 sensitive items remain. If it errors, do NOT fall back to sending the original. "
+                       "Give `path` (an existing image file) instead of `uuid` for a file that is not in Photos.",
+        "parameters": {"type": "object", "properties": {
             "uuid": {**_STR, "description": "Photo uuid from lumina_search"},
+            "path": {**_STR, "description": "Absolute path of an image file, instead of uuid"},
             "preset": {**_STR, "enum": ["hotel", "airline", "all"], "description": "Default hotel"},
         }},
     },

@@ -155,7 +155,7 @@ def test_route_and_register():
                        "register_skill": lambda *a, **k: None})()
     lumina.register(c)
     props = c.tools["lumina_redact"]["schema"]["parameters"]
-    assert props["required"] == ["uuid"] and props["properties"]["preset"]["enum"] == ["hotel", "airline", "all"]
+    assert "required" not in props and "path" in props["properties"] and props["properties"]["preset"]["enum"] == ["hotel", "airline", "all"]
     assert "allow_original" in c.tools["lumina_export"]["schema"]["parameters"]["properties"]
 
 
