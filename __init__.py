@@ -9,7 +9,7 @@ import logging
 import re
 from pathlib import Path
 
-from . import photos, redact
+from . import leakguard, photos, redact
 
 log = logging.getLogger(__name__)
 
@@ -160,7 +160,9 @@ def _id_guard(uuids):
 
 
 def _guard(tool_name, args, **kwargs):
-    """Veto malformed album / export requests before they reach Apple Photos or the disk."""
+    """Veto malformed album / export requests before they reach Apple Photos or the disk; Leak Guard for every other tool."""
+    if not (tool_name or "").startswith("lumina_"):
+        return leakguard.check(tool_name, args, kwargs.get("session_id", ""))
     if tool_name == "lumina_export":
         u = (args or {}).get("uuids")
         if not isinstance(u, list) or not 0 < len(u) <= 10 or not all(isinstance(x, str) and photos.UUID_RE.fullmatch(x) for x in u):
@@ -291,6 +293,12 @@ def _tidy_redact(text, media, display, messaging):
 
 
 def _append(response_text="", session_id="", platform="", **kwargs):
+    """transform_llm_output: Leak Guard first (messaging), then the grid / redact handling."""
+    held = _messaging(platform) and leakguard.scrub(response_text, session_id)
+    return _append_grid(held or response_text, session_id, platform, **kwargs) or held or None
+
+
+def _append_grid(response_text="", session_id="", platform="", **kwargs):
     """transform_llm_output: add the grid directive if the model forgot it (desktop only; chat apps cannot render it)."""
     m = _PENDING_MEDIA.pop(session_id, None)
     red = session_id in _REDACT_MEDIA
@@ -311,6 +319,7 @@ def _route(user_message="", session_id="", platform="", **kwargs):
     _PENDING.pop(session_id, None)
     _PENDING_MEDIA.pop(session_id, None)
     _REDACT_MEDIA.discard(session_id)
+    leakguard.note_turn(session_id, user_message)
     if isinstance(user_message, str) and ((_HIDE_RE.search(user_message) and _IDDOC_RE.search(user_message)) or _SEND_ID_RE.search(user_message)):
         return {"context": _HINT + " " + _REDACT_HINT}
     if (isinstance(user_message, str) and _MEMORY_RE.search(user_message) and not _THIS_DAY_RE.search(user_message)
