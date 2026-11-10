@@ -146,3 +146,14 @@ def test_tool_display_and_route(monkeypatch):
     assert "lumina_redact" in lumina._route(user_message="hide my passport number before I send it", session_id="s")["context"]
     assert "lumina_expiry" in lumina._route(user_message="is anything of mine expiring?", session_id="s")["context"]
     assert "lumina_privacy_check" not in lumina._route(user_message="Find my passport photo", session_id="s")["context"]
+
+
+def test_hint_survives_raising_search_info():
+    class Bad:
+        uuid = "B"
+
+        @property
+        def search_info(self):
+            raise RuntimeError("boom")
+
+    assert privacy._hint(Bad(), []) is False and privacy._hint(Bad(), ["passport"]) is True

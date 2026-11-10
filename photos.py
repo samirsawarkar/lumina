@@ -98,13 +98,15 @@ def _sig(p) -> str:
 
 
 def _recognise(p) -> list[str]:
-    """Live Vision recognition. iCloud-only originals: read the largest local derivative (detected_text() would use derivative [0])."""
-    d = sorted((x for x in getattr(p, "path_derivatives", None) or [] if os.path.exists(x)), key=os.path.getsize, reverse=True)
-    if d and not (getattr(p, "path", None) and os.path.exists(p.path)):
-        from . import redact  # lazy: redact imports photos
+    """Live Vision recognition of a local file: the original, else the largest derivative (iCloud-only), else nothing.
+    Never p.detected_text(): osxphotos caches its result in an extended attribute inside the Photos library."""
+    src = p.path if getattr(p, "path", None) and os.path.exists(p.path) else next(iter(sorted(
+        (x for x in getattr(p, "path_derivatives", None) or [] if os.path.exists(x)), key=os.path.getsize, reverse=True)), None)
+    if not src:
+        return []
+    from . import redact  # lazy: redact imports photos
 
-        return [l.text for l in redact.ocr_boxes(d[0])]
-    return [s for s, _ in p.detected_text()]
+    return [l.text for l in redact.ocr_boxes(src)]
 
 
 def _load_cache() -> dict:
@@ -209,8 +211,16 @@ def _is_local(p) -> bool:
 
 
 def _snippet(p, indexed=False) -> str | None:
-    if indexed and not index_words(p):
-        return None  # Apple's index has no text for this photo; skip a live recognition
+    if indexed and not index_words(p):  # no Apple tokens: show text already read (cache only), never a new recognition
+        try:
+            con = sqlite3.connect(_cache_file())
+            try:
+                row = con.execute("SELECT sig, text FROM ocr WHERE uuid=?", (p.uuid,)).fetchone()
+            finally:
+                con.close()
+            return (" ".join(_cached_lines({p.uuid: row}, p) or [])[:80]) or None
+        except Exception:
+            return None
     try:
         t = " ".join(ocr_text(p))
     except Exception:
