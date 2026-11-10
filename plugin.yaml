@@ -15,6 +15,7 @@ provides_tools:
   - lumina_expiry
   - lumina_make_memory
   - lumina_redact
+  - lumina_privacy_check
 provides_hooks:
   - pre_tool_call
   - post_tool_call

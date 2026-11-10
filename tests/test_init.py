@@ -24,7 +24,7 @@ class Ctx:
 def test_register():
     c = Ctx()
     lumina.register(c)
-    assert set(c.tools) == {"lumina_search", "lumina_create_album", "lumina_library_info", "lumina_on_this_day", "lumina_export", "lumina_read_text", "lumina_expiry", "lumina_make_memory", "lumina_redact"}
+    assert set(c.tools) == {"lumina_search", "lumina_create_album", "lumina_library_info", "lumina_on_this_day", "lumina_export", "lumina_read_text", "lumina_expiry", "lumina_make_memory", "lumina_redact", "lumina_privacy_check"}
     assert "lumina_delete" not in c.tools and "lumina" in c.skills and "pre_tool_call" in c.hooks
     for name, (schema, _) in c.tools.items():
         assert schema["name"] == name and schema["parameters"]["type"] == "object"

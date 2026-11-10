@@ -9,7 +9,7 @@ import logging
 import re
 from pathlib import Path
 
-from . import photos, redact
+from . import photos, privacy, redact
 
 log = logging.getLogger(__name__)
 
@@ -102,6 +102,13 @@ def _expiry(a):
     if res["items"]:
         res["display"] = _display(a, {"photos": res["items"], "all_uuids": res["all_uuids"]}, "Expiry radar")
     res.pop("all_uuids")
+    return res
+
+
+def _privacy(a):
+    res = privacy.privacy_check(photos.get_db())
+    if res["items"]:
+        res["display"] = _display(a, {"photos": res["items"], "all_uuids": res["all_uuids"]}, "Sensitive documents")
     return res
 
 
@@ -203,6 +210,7 @@ _MEMORY_RE = re.compile(r"\b(memory|memories|recap|slideshow|video|movie|film|mo
 _HIDE_RE = re.compile(r"\b(hide|hiding|redact\w*|blur\w*|cover|censor\w*|mask\w*|safe|safely)\b", re.I)
 _IDDOC_RE = re.compile(r"\b(passport|id|licen[cs]e|card|visa|document|ticket|boarding pass|insurance|certificate)\b", re.I)
 _SEND_ID_RE = re.compile(r"\b(send|share|forward|text|whatsapp|email)\b.*\b(passport|id|licen[cs]e|card)\b", re.I)
+_PRIVACY_RE = re.compile(r"\b(exposed|sensitive|private documents?|privacy check|check-?up|at risk|could leak)\b", re.I)
 _THIS_DAY_RE = re.compile(r"\bon this day\b", re.I)
 _TRIP_RE = re.compile(r"\b(trips?|holidays?|vacations?|weddings?|birthdays?|years?|(19|20)\d\d)\b", re.I)
 _LOCAL_SURFACES = {"", "cli", "tui", "desktop", "local"}  # Hermes agent.platform values with an in-app photo grid
@@ -226,6 +234,10 @@ _REDACT_HINT = ("The user wants to send or hide details on a photo of an ID or d
                 "with its uuid (preset: hotel/landlord -> hotel, airline/check-in -> airline, anyone else or unsure -> all) and present the result "
                 "as the tool says. Never send the original with lumina_export. Say in one sentence what kinds were hidden (never the values) "
                 "and that Lumina re-read the copy and 0 sensitive items remain.")
+_PRIVACY_HINT = ("The user wants a privacy check-up. Call lumina_privacy_check (no arguments). Summarise the counts per kind in one or two plain "
+                 "sentences (say if `partial` is true that only the newest photos were checked) and never print any values. Say everything was "
+                 "read on this Mac. Then offer two next steps: safe copies (lumina_redact, one photo at a time) or collecting them in one album "
+                 "(lumina_create_album with the result's all_uuids).")
 _HINT = ("Lumina's lumina_search is the source of truth for the user's Apple Photos library: use it, not terminal or file search, "
          "for photo questions. Present what it finds without judging whether images are real or samples. The photo grid is attached "
          "automatically, so answer in one or two short sentences and do not list uuids or file paths.")
@@ -254,7 +266,7 @@ def _remember(tool_name, result, session_id="", **kwargs):
                 _REDACT_MEDIA.discard(k)
                 _PENDING_MEDIA.pop(k)
         return
-    if tool_name not in ("lumina_search", "lumina_on_this_day", "lumina_read_text", "lumina_expiry") or not key:
+    if tool_name not in ("lumina_search", "lumina_on_this_day", "lumina_read_text", "lumina_expiry", "lumina_privacy_check") or not key:
         return
     try:
         d = json.loads(result).get("display")
@@ -316,6 +328,8 @@ def _route(user_message="", session_id="", platform="", **kwargs):
     if (isinstance(user_message, str) and _MEMORY_RE.search(user_message) and not _THIS_DAY_RE.search(user_message)
             and (_PHOTO_RE.search(user_message) or _TRIP_RE.search(user_message))):
         return {"context": _HINT + " " + _MEMORY_HINT}
+    if isinstance(user_message, str) and _PRIVACY_RE.search(user_message):
+        return {"context": _HINT + " " + _PRIVACY_HINT}
     if (isinstance(user_message, str) and _EXPIRY_RE.search(user_message) and _EXPIRY_OF_RE.search(user_message)
             and not re.search(r"\b(passport|licen[cs]e|card|visa)\b", user_message, re.I)):  # one named document -> lumina_read_text below
         return {"context": _HINT + " " + _EXPIRY_HINT}
@@ -404,6 +418,14 @@ _SCHEMAS = {
             "today": {**_STR, "description": "ISO date YYYY-MM-DD, default today (testing/demo)"},
         }},
     },
+    "lumina_privacy_check": {
+        "name": "lumina_privacy_check",
+        "description": "Privacy check-up: find sensitive documents sitting in the photo library (passports, payment cards, passwords, ID documents). "
+                       "Everything is read on this Mac. Returns counts per kind, `all_uuids` and `items` (kind, document type, date), never any values. "
+                       "Summarise the counts in one or two sentences, never print values, then offer safe copies (lumina_redact per photo) or one album "
+                       "(lumina_create_album with all_uuids). The display grid is added automatically; do not list uuids.",
+        "parameters": {"type": "object", "properties": {}},
+    },
     "lumina_make_memory": {
         "name": "lumina_make_memory",
         "description": "Make a short (~20 s) memory video from photos: picks up to 12 spread across the time span, with slow zoom and captions. "
@@ -426,7 +448,8 @@ _SCHEMAS = {
 }
 _HANDLERS = {"lumina_search": _search, "lumina_create_album": _album, "lumina_library_info": _info,
              "lumina_on_this_day": _on_this_day, "lumina_export": _export,
-             "lumina_redact": _redact, "lumina_read_text": _read_text, "lumina_expiry": _expiry, "lumina_make_memory": _make_memory}
+             "lumina_redact": _redact, "lumina_read_text": _read_text, "lumina_expiry": _expiry, "lumina_make_memory": _make_memory,
+             "lumina_privacy_check": _privacy}
 
 
 def register(ctx):
