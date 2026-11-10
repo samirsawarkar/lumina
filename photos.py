@@ -97,6 +97,28 @@ def _sig(p) -> str:
     return f"{p.date_modified.isoformat() if getattr(p, 'date_modified', None) else ''}|{getattr(p, 'fingerprint', None) or ''}"
 
 
+def _recognise(p) -> list[str]:
+    """Live Vision recognition. iCloud-only originals: read the largest local derivative (detected_text() would use derivative [0])."""
+    d = sorted((x for x in getattr(p, "path_derivatives", None) or [] if os.path.exists(x)), key=os.path.getsize, reverse=True)
+    if d and not (getattr(p, "path", None) and os.path.exists(p.path)):
+        from . import redact  # lazy: redact imports photos
+
+        return [l.text for l in redact.ocr_boxes(d[0])]
+    return [s for s, _ in p.detected_text()]
+
+
+def _load_cache() -> dict:
+    """{uuid: (sig, json text)} from the OCR cache, read once per scan. {} on any error."""
+    try:
+        con = sqlite3.connect(_cache_file())
+        try:
+            return {u: (g, t) for u, g, t in con.execute("SELECT uuid, sig, text FROM ocr")}
+        finally:
+            con.close()
+    except Exception:
+        return {}
+
+
 def ocr_text(p) -> list[str]:
     """Detected text strings for a still image, cached in sqlite by uuid + signature. Cache errors are logged, never raised."""
     if p.ismovie:
@@ -112,7 +134,7 @@ def ocr_text(p) -> list[str]:
     except Exception as e:
         log.warning("OCR cache read failed", exc_info=e)
     try:
-        out = [s for s, _ in p.detected_text()]
+        out = _recognise(p)
         if con is not None:
             try:
                 con.execute("INSERT OR REPLACE INTO ocr VALUES (?,?,?)", (p.uuid, sig, json.dumps(out)))
@@ -125,12 +147,47 @@ def ocr_text(p) -> list[str]:
             con.close()
 
 
+# ---- Apple's own text index (osxphotos search_info): lowercase single-word tokens, instant to read ----
+SEARCH_BUDGET, EXPIRY_BUDGET, RECENT = 6.0, 20.0, dt.timedelta(days=3)  # seconds, seconds, "maybe not indexed yet"
+
+
+def index_words(p) -> list[str]:
+    try:
+        return list(p.search_info.detected_text or [])
+    except Exception:  # no search_info (old macOS / None) or unreadable
+        return []
+
+
+def _has_index(ps) -> bool:
+    return any(index_words(p) for p in ps)
+
+
+def _recent(p) -> bool:
+    try:
+        return dt.datetime.now(p.date_added.tzinfo) - p.date_added < RECENT
+    except Exception:
+        return False
+
+
+def _ts(p):
+    return p.date.timestamp() if p.date else 0
+
+
+def _in_index(words, toks) -> bool:
+    """Every query word is inside a token or splits completely into tokens ('wifi' = 'wi' + 'fi')."""
+    def split(w):
+        return not w or any(w.startswith(t) and split(w[len(t):]) for t in toks if t)
+    return all(any(w in t for t in toks) or split(w) for w in words)
+
+
 # ---- search ----
 def _is_local(p) -> bool:
     return bool(p.path and os.path.exists(p.path)) or any(os.path.exists(d) for d in (p.path_derivatives or []))
 
 
-def _snippet(p) -> str | None:
+def _snippet(p, indexed=False) -> str | None:
+    if indexed and not index_words(p):
+        return None  # Apple's index has no text for this photo; skip a live recognition
     try:
         t = " ".join(ocr_text(p))
     except Exception:
@@ -138,7 +195,7 @@ def _snippet(p) -> str | None:
     return t[:80] or None
 
 
-def photo_dict(p) -> dict:
+def photo_dict(p, indexed=False) -> dict:
     return {
         "uuid": p.uuid,
         "date": p.date.isoformat() if p.date else None,
@@ -146,7 +203,7 @@ def photo_dict(p) -> dict:
         "place": p.place.name if p.place else None,
         "persons": [x for x in p.persons or [] if x != "_UNKNOWN_"],
         "labels": list(p.labels or [])[:8],
-        "text_snippet": _snippet(p),
+        "text_snippet": _snippet(p, indexed),
         "is_local": _is_local(p),
         "is_screenshot": bool(p.screenshot),
         "is_video": bool(p.ismovie),
@@ -176,9 +233,14 @@ def search(db, text=None, person=None, place=None, label=None, date_from=None, d
     md = {(on_day.month, on_day.day)} if on_day else set()
     if on_day and md == {(2, 28)} and not calendar.isleap(on_day.year):
         md.add((2, 29))  # leap-day photos surface on Feb 28 in common years
-    hits = []
+    hits, pending = [], []
+    t0 = time.monotonic()
+    ps = list(db.photos(movies=True))
+    indexed = _has_index(ps)
+    words = [w for w in re.split(r"[\s\-]+", text.lower()) if w] if text else []
+    cache = _load_cache() if text else {}
     # ponytail: linear scan over db.photos(); add an index if libraries >100k feel slow
-    for p in db.photos(movies=True):
+    for p in ps:
         if p.hidden or p.intrash:
             continue
         day = p.date.date() if p.date else None
@@ -204,15 +266,34 @@ def search(db, text=None, person=None, place=None, label=None, date_from=None, d
             t = low(text)
             hay = [p.title, p.description, p.place.name if p.place else "", *(p.labels or []), *(p.keywords or [])]
             if not any(t in low(h) for h in hay):
-                try:
-                    if not any(t in low(s) for s in ocr_text(p)):
+                toks = index_words(p)
+                row = cache.get(p.uuid)
+                if toks and _in_index(words, toks):
+                    pass
+                elif row and row[0] == _sig(p):
+                    if not any(t in low(s) for s in json.loads(row[1])):
                         continue
-                except Exception:
+                elif p.ismovie or (indexed and (toks or not _recent(p))):
+                    continue  # Apple's index covers it (no match) or it is not worth a live read
+                else:
+                    pending.append(p)
                     continue
         hits.append(p)
-    hits.sort(key=lambda p: p.date.timestamp() if p.date else 0, reverse=True)
+    partial = False
+    for p in sorted(pending, key=_ts, reverse=True):  # bounded live recognition; results fill the cache for next time
+        if time.monotonic() - t0 > SEARCH_BUDGET:
+            partial = True
+            break
+        try:
+            if any(low(text) in low(s) for s in ocr_text(p)):
+                hits.append(p)
+        except Exception:
+            pass
+    hits.sort(key=_ts, reverse=True)
     return {"count": min(len(hits), limit), "total_matches": len(hits),
-            "photos": [photo_dict(p) for p in hits[:limit]], "all_uuids": [p.uuid for p in hits[:200]],
+            "photos": [photo_dict(p, indexed) for p in hits[:limit]], "all_uuids": [p.uuid for p in hits[:200]],
+            **({"text_scan": "partial", "note": "Only part of the library was read for text this time; say so, and a repeat search will cover more."}
+               if partial else {}),
             **({"by_year": {str(y): sum(1 for p in hits if p.date.year == y)
                             for y in sorted({p.date.year for p in hits}, reverse=True)}} if on_day else {})}
 
@@ -432,14 +513,23 @@ def document_name(lines: list[str]) -> str:
     return "Document"
 
 
+_EXP_WORDS = ("valid", "thru", "use", "renew", "good")  # tokens of every _EXP_KEY phrase; any token starting "exp" counts too
+
+
 def expiry(db, within_days=None, today=None) -> dict:
     """Documents with an expiry date in OCR text, soonest first; expired ones have negative days_left."""
     today = today or dt.date.today()
-    items = []
-    # ponytail: first scan of a big library is slow because OCR runs per photo (cached in sqlite afterwards)
-    for p in db.photos(movies=False):
-        if p.hidden or p.intrash or p.ismovie:
-            continue
+    t0, items, partial = time.monotonic(), [], False
+    ps = sorted((p for p in db.photos(movies=False) if not (p.hidden or p.intrash or p.ismovie)), key=_ts, reverse=True)
+    indexed = _has_index(ps)
+    for p in ps:
+        if indexed:  # a missed keyword hides a document, so the set is a superset; unindexed recent photos are read live
+            toks = index_words(p)
+            if toks and not any(t.startswith("exp") or t in _EXP_WORDS for t in toks) or not toks and not _recent(p):
+                continue
+        if time.monotonic() - t0 > EXPIRY_BUDGET:
+            partial = True
+            break
         try:
             lines = ocr_text(p)
             d = parse_expiry(lines)
@@ -453,7 +543,8 @@ def expiry(db, within_days=None, today=None) -> dict:
     if within_days is not None:
         items = [i for i in items if i["days_left"] <= within_days]
     items.sort(key=lambda i: i["expires"])
-    return {"count": len(items), "items": items, "all_uuids": [i["uuid"] for i in items[:200]]}
+    return {"count": len(items), "items": items, "all_uuids": [i["uuid"] for i in items[:200]],
+            **({"partial": True, "note": "Only part of the library was read this time; say so, and ask again to cover more."} if partial else {})}
 
 
 # ---- "Make me a memory": Ken Burns slideshow (MP4 via ffmpeg, GIF fallback) ----

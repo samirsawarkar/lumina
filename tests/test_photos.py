@@ -151,7 +151,7 @@ def _otd(db, day):
 def test_on_this_day_matching(monkeypatch):
     from lumina import photos
 
-    monkeypatch.setattr(photos, "photo_dict", lambda p: {"uuid": p.uuid})
+    monkeypatch.setattr(photos, "photo_dict", lambda p, *a: {"uuid": p.uuid})
     db = _DB(_P(2020, 11, 8), _P(2024, 11, 8), _P(2025, 11, 8), _P(2023, 11, 9), _P(2022, 12, 31), _P(2023, 1, 1), _P(2024, 2, 29))
     ids, by = _otd(db, "2025-11-08")  # same-year and other days excluded, newest year first
     assert ids == ["20241108", "20201108"] and by == {"2024": 1, "2020": 1}
@@ -245,3 +245,133 @@ def test_pick_no_duplicate_favorite():
     ps = [NS(i=i, favorite=(i == 1)) for i in range(5)]
     got = photos._pick(ps, k=3)  # idx [0,2,4]: 1 is neighbour of both 0 and 2
     assert len({p.i for p in got}) == 3
+
+
+# ---- Apple text index, bounded live fallback ----
+def _ix(uuid, toks=None, days_old=30, **kw):
+    import datetime as dt
+    from types import SimpleNamespace as NS
+
+    d = dict(uuid=uuid, date=dt.datetime(2024, 1, 1), date_added=dt.datetime.now() - dt.timedelta(days=days_old),
+             title=None, description=None, place=None, persons=None, labels=None, keywords=None, hidden=False,
+             intrash=False, ismovie=False, screenshot=False, path=None, path_derivatives=None, date_modified=None,
+             fingerprint=None, search_info=NS(detected_text=toks) if toks is not None else None)
+    return NS(**{**d, **kw})
+
+
+def _live(monkeypatch, texts=None, snippets=False):
+    calls = []
+    if not snippets:  # result snippets also call ocr_text; keep them out of the match-time counts
+        monkeypatch.setattr(photos, "_snippet", lambda p, indexed=False: None)
+
+    def fake(p):
+        calls.append(p.uuid)
+        return (texts or {}).get(p.uuid, [])
+    monkeypatch.setattr(photos, "ocr_text", fake)
+    return calls
+
+
+def _uu(db, **kw):
+    return [x["uuid"] for x in photos.search(db, **kw)["photos"]]
+
+
+def test_index_search_split_and_multiword(monkeypatch):
+    from types import SimpleNamespace as NS
+
+    calls = _live(monkeypatch)
+    wifi = _ix("W", ["4821", "5g", "blue", "fi", "mango", "password", "wi"])
+    pp = _ix("P", ["alex", "passport", "x1234567"])
+    none = _ix("N", [])
+    db = NS(photos=lambda movies=True: [wifi, pp, none])
+    assert _uu(db, text="wifi") == ["W"] and _uu(db, text="Wi-Fi") == ["W"]
+    assert _uu(db, text="blue password") == ["W"] and _uu(db, text="blue passport") == []
+    assert set(_uu(db, text="pass")) == {"W", "P"}
+    assert calls == []  # indexed library, none of the misses is recent: no live recognition
+    assert photos.search(db, text="wifi").get("text_scan") is None
+
+
+def test_search_budget_partial_and_cache_resumes(monkeypatch):
+    from types import SimpleNamespace as NS
+
+    # no Apple index at all: live, newest first, until the budget runs out
+    old = _ix("O", [], date=__import__("datetime").datetime(2020, 1, 1))
+    new = _ix("A", [], date=__import__("datetime").datetime(2024, 1, 1))
+    db = NS(photos=lambda movies=True: [old, new])
+    calls = _live(monkeypatch, {"A": ["PASSPORT"], "O": ["PASSPORT"]})
+    monkeypatch.setattr(photos, "SEARCH_BUDGET", -1)
+    r = photos.search(db, text="passport")
+    assert r["text_scan"] == "partial" and r["total_matches"] == 0 and "part of the library" in r["note"] and calls == []
+    monkeypatch.setattr(photos, "SEARCH_BUDGET", 6.0)
+    r = photos.search(db, text="passport")
+    assert calls == ["A", "O"] and "text_scan" not in r and r["total_matches"] == 2
+
+
+def test_search_cache_used_without_recognition(monkeypatch, tmp_path):
+    import json as j
+    import sqlite3
+    from types import SimpleNamespace as NS
+
+    c = sqlite3.connect(tmp_path / "ocr.sqlite")
+    c.execute("CREATE TABLE ocr (uuid TEXT PRIMARY KEY, sig TEXT, text TEXT)")
+    c.execute("INSERT INTO ocr VALUES ('C', '|', ?)", (j.dumps(["Gate 12"]),))
+    c.commit()
+    c.close()
+    calls = _live(monkeypatch)
+    p = _ix("C", ["x"])
+    assert _uu(NS(photos=lambda movies=True: [p]), text="gate") == ["C"] and calls == []
+
+
+def test_recent_untokenised_photo_read_live_in_indexed_library(monkeypatch):
+    from types import SimpleNamespace as NS
+
+    calls = _live(monkeypatch, {"R": ["gate 12"]})
+    db = NS(photos=lambda movies=True: [_ix("I", ["a"]), _ix("R", [], days_old=1), _ix("S", [], days_old=40)])
+    assert _uu(db, text="gate") == ["R"] and calls == ["R"]
+
+
+def test_snippet_skips_recognition_for_untokenised_in_indexed_library(monkeypatch):
+    from types import SimpleNamespace as NS
+
+    calls = _live(monkeypatch, snippets=True)
+    ps = [_ix(f"U{i}", [] if i else ["z"]) for i in range(5)]
+    db = NS(photos=lambda movies=True: ps)
+    photos.search(db, date_from="2020-01-01")
+    assert calls == ["U0"]  # only the photo with Apple tokens
+
+
+def test_derivative_fallback(monkeypatch, tmp_path):
+    from types import SimpleNamespace as NS
+
+    from lumina import redact
+
+    small, big = tmp_path / "s.jpg", tmp_path / "b.jpg"
+    small.write_bytes(b"1")
+    big.write_bytes(b"12345")
+    seen = []
+    monkeypatch.setattr(redact, "ocr_boxes", lambda path: seen.append(path) or [NS(text="Hello")])
+    p = _ix("D", None, path=None, path_derivatives=[str(small), str(big), str(tmp_path / "gone.jpg")],
+            detected_text=lambda: [("nope", 1)])
+    assert photos.ocr_text(p) == ["Hello"] and seen == [str(big)]
+    p.path = str(big)  # original on disk: Apple's own call
+    p.uuid = "D2"
+    assert photos.ocr_text(p) == ["nope"]
+
+
+def test_expiry_prefilter_and_unindexed_budget(monkeypatch):
+    texts = {"A": ["PASSPORT", "Expiry: 01 JAN 2034"], "B": ["GYM", "VALID THRU: 12/2026"], "C": ["Card", "EXPIRES: 01/2026"],
+             "D": ["Receipt", "Total 5"], "U": ["X", "Use by: 01 JAN 2030"]}
+    calls = _live(monkeypatch, texts)
+    from types import SimpleNamespace as NS
+
+    ps = [_ix("A", ["expiry", "passport"]), _ix("B", ["thru", "valid"]), _ix("C", ["expires"]),
+          _ix("D", ["total"]), _ix("U", ["by", "use"]), _ix("X", [], days_old=90)]
+    db = NS(photos=lambda movies=True: ps)
+    r = photos.expiry(db, today=date(2026, 11, 8))
+    assert [i["uuid"] for i in r["items"]] == ["C", "B", "U", "A"] and sorted(calls) == ["A", "B", "C", "U"]  # D, X never read
+    assert "partial" not in r
+    calls.clear()
+    monkeypatch.setattr(photos, "index_words", lambda p: [])  # no Apple index: everything read, budget applies
+    assert len(photos.expiry(db, today=date(2026, 11, 8))["items"]) == 4 and len(calls) == 6
+    monkeypatch.setattr(photos, "EXPIRY_BUDGET", -1)
+    r = photos.expiry(db, today=date(2026, 11, 8))
+    assert r["partial"] is True and r["count"] == 0
