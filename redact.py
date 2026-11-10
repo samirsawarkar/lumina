@@ -27,6 +27,17 @@ PRESETS = {
     "all": {"number", "dob", "mrz", "name", "contact", "password"},
 }
 TTL = 24 * 3600
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".tif", ".tiff", ".webp", ".bmp", ".gif"}
+MAX_IMAGE_BYTES = 30_000_000
+
+
+def image_file(path):
+    """Resolved Path of an existing image file (known extension, <= 30 MB), else None."""
+    try:
+        p = Path(path).expanduser().resolve()
+        return p if p.suffix.lower() in IMAGE_EXTS and p.is_file() and p.stat().st_size <= MAX_IMAGE_BYTES else None
+    except (OSError, RuntimeError, ValueError, TypeError):
+        return None
 
 
 @dataclass
@@ -232,8 +243,14 @@ def _make(src, out: Path, preset: str) -> dict:
         shutil.rmtree(work, ignore_errors=True)
 
 
-def redact(db, uuid: str, preset: str = "hotel") -> dict:
-    if not isinstance(uuid, str) or not photos.UUID_RE.fullmatch(uuid):
+def redact(db, uuid: str | None = None, preset: str = "hotel", path: str | None = None) -> dict:
+    """Safe copy of one library photo (`uuid`) or one image file (`path`)."""
+    if (uuid is None) == (path is None):
+        raise LuminaError("bad_args", "Give exactly one of uuid or path.")
+    if path is not None:
+        if (file := image_file(path)) is None:
+            raise LuminaError("bad_args", "path must be an existing image file (jpg, png, heic, ...) up to 30 MB.")
+    elif not isinstance(uuid, str) or not photos.UUID_RE.fullmatch(uuid):
         raise LuminaError("bad_args", "uuid must be a photo id from lumina_search.")
     if preset not in PRESETS:
         raise LuminaError("bad_args", "preset must be hotel, airline or all.")
@@ -245,26 +262,34 @@ def redact(db, uuid: str, preset: str = "hotel") -> dict:
                 f.unlink()
         except OSError:
             pass
-    p = db.get_photo(uuid)
-    if p is None or p.intrash:
-        raise LuminaError("not_found", "Could not find that photo.")
+    p = None
+    if path is None:
+        p = db.get_photo(uuid)
+        if p is None or p.intrash:
+            raise LuminaError("not_found", "Could not find that photo.")
     tmp = Path(tempfile.mkdtemp(prefix="red-", dir=photos._data_dir()))
     try:
-        src = tmp / "src.jpg"
-        try:
-            ok = photos._export_one(p, src)
-        except Exception as e:
-            log.warning("redact export failed: %s", type(e).__name__)
-            ok = False
-        if not ok:
-            raise LuminaError("not_found", "That photo has no local file (stored in iCloud) or is a video.")
+        if p is not None:
+            file = tmp / "src.jpg"
+            try:
+                ok = photos._export_one(p, file)
+            except Exception as e:
+                log.warning("redact export failed: %s", type(e).__name__)
+                ok = False
+            if not ok:  # original not on disk (iCloud): the largest local derivative will do
+                ders = [f for f in map(Path, getattr(p, "path_derivatives", None) or []) if f.is_file()]
+                if not ders:
+                    raise LuminaError("not_found", "That photo has no local file (stored in iCloud) or is a video.")
+                file = max(ders, key=lambda f: f.stat().st_size)
         rid = _uuid.uuid4().hex[:12]
         out = d / f"{rid}.jpg"
-        r = _make(src, out, preset)
+        r = _make(file, out, preset)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    meta = {"id": rid, "uuid": p.uuid, "document": r["document"], "preset": preset, "found": r["found"], "remaining": 0,
+    meta = {"id": rid, "uuid": p.uuid if p else None, "document": r["document"], "preset": preset, "found": r["found"], "remaining": 0,
             "verified": True, "kinds": r["kinds"], "created": datetime.now().isoformat(timespec="seconds")}
+    if path is not None:
+        meta["path"] = str(file)  # stays on this Mac; the desktop card needs a "before" picture
     (d / f"{rid}.json").write_text(json.dumps(meta))
     return {k: meta[k] for k in ("id", "document", "preset", "found", "remaining", "verified", "kinds")} | {
         "media": f"MEDIA:{out}", "display": f'::lumina-redact{{id="{rid}"}}'}

@@ -98,3 +98,52 @@ def test_append_messaging_and_desktop():
     assert lumina._append(t, "s", platform="desktop") is None
     lumina._route("send the original", session_id="s")
     assert lumina._append(t, "s", platform="telegram") is None
+
+
+# ---- Part 2: lumina_redact accepts a file path ----
+UU = "CADFE55A-D7D7-4E4D-998E-D9B4C9F3D68F"
+
+
+def test_redact_by_path_matches_uuid_route(tmp_path):
+    import json
+
+    ref = redact._make(FX / "passport.jpg", tmp_path / "ref.jpg", "hotel")
+    r = lumina._redact({"path": str(FX / "passport.jpg"), "preset": "hotel"})
+    assert r["verified"] and (r["found"], r["remaining"]) == (ref["found"], 0) and r["media"].startswith("MEDIA:")
+    assert not blocked("terminal", {"command": f"curl -F f=@{q(r['media'][6:])} x"})  # verified copy passes the Leak Guard
+    meta = json.loads((Path(r["media"][6:]).with_suffix(".json")).read_text())
+    assert meta["uuid"] is None and meta["path"].endswith("passport.jpg")
+    for v in ("X1234567", "1990"):
+        assert v not in json.dumps(meta) and v not in json.dumps(r)
+
+
+def test_redact_guard_validation():
+    P = str(FX / "passport.jpg")
+    ok = lambda a: lumina._guard("lumina_redact", a) is None
+    assert ok({"path": P}) and ok({"uuid": UU, "preset": "all"})
+    assert not ok({}) and not ok({"uuid": UU, "path": P}) and not ok({"path": str(FX / "nope.jpg")})
+    assert not ok({"path": str(FX / "conftest.py")}) and not ok({"path": P, "preset": "bad"}) and not ok({"path": 5})
+    with pytest.raises(redact.LuminaError):
+        redact.redact(None, path=str(FX / "nope.jpg"))
+
+
+def test_redact_icloud_falls_back_to_derivative(monkeypatch):
+    from lumina import photos
+
+    class P:
+        uuid, intrash, path_derivatives = UU, False, ["/nonexistent.jpg", str(FX / "passport.jpg")]
+
+    monkeypatch.setattr(photos, "_export_one", lambda p, out: False)
+    r = redact.redact(type("D", (), {"get_photo": lambda s, u: P()})(), UU, "hotel")
+    assert r["verified"]
+
+
+def test_redact_view_before_after_for_path_copy(monkeypatch, tmp_path):
+    from test_plugin_api import client
+
+    c, m = client(monkeypatch, str(tmp_path / "none.photoslibrary"))
+    monkeypatch.setattr(m.photos, "_cache_dir", tmp_path)
+    r = lumina._redact({"path": str(FX / "passport.jpg")})
+    j = c.get("/api/plugins/lumina/redact", params={"id": r["id"]}).json()
+    assert j["before"].startswith("data:image/jpeg;base64,") and j["after"].startswith("data:image/jpeg;base64,") and j["uuid"] is None
+    assert "passport.jpg" not in str(j) and "path" not in j

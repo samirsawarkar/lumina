@@ -22,7 +22,7 @@ _NET_RE = re.compile(r"\b(curl|wget|scp|sftp|rsync|ftp|nc|ncat|ssh|mail|mailx|se
                      r"requests|urllib|httpx|smtplib|fetch)\b", re.I)
 _RAW_RE = re.compile(r"\b(original|unredacted|un-redacted|as is|anyway|without (?:hiding|redacting|blurring|covering))\b", re.I)
 _NO_RE = re.compile(r"\b(don'?t|do not|never|no)\b", re.I)
-_MAX_BYTES, _MAX_TEXT, _MAX_FILES = 30_000_000, 200_000, 4
+_MAX_TEXT, _MAX_FILES = 200_000, 4
 _RAW = set()  # sessions whose user asked for the raw file THIS turn
 _CACHE = {}  # (real path, mtime_ns, size) -> document name or None
 HELD = "Lumina held back an image that shows an ID document; it can make a safe copy with the sensitive parts hidden."
@@ -59,8 +59,7 @@ def image_paths(args) -> list[Path]:
         s = s[:_MAX_TEXT]
         for raw in [m.group(2) for m in _QUOTED.finditer(s)] + _MEDIA.findall(s) + [m.group(0).replace("\\ ", " ") for m in _BARE.finditer(s)]:
             try:
-                p = Path(raw).expanduser().resolve()
-                if p not in found and p.is_file() and p.stat().st_size <= _MAX_BYTES:
+                if (p := redact.image_file(raw)) and p not in found:
                     found.append(p)
             except (OSError, RuntimeError, ValueError):
                 pass
@@ -114,7 +113,7 @@ def check(tool_name, args, session_id=""):
             if name := sensitive(p):
                 return {"action": "block", "message": (
                     f"Lumina Leak Guard stopped this call: an image in it looks like a {name} (an ID document). Nothing left this Mac. "
-                    "Tell the user, and offer a safe copy with the sensitive parts hidden instead. Only if the user says in their own words "
+                    "Tell the user, and offer a safe copy with the sensitive parts hidden: call lumina_redact with path=<that image file> (preset hotel, airline or all by recipient) and send its result instead. Only if the user says in their own words "
                     "that they want the original (for example \"send the original\") is the block lifted.")}
     except Exception as e:
         log.warning("Leak Guard failed, allowing: %s", type(e).__name__)

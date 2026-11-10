@@ -138,7 +138,7 @@ def _info(_a):
 
 
 def _redact(a):
-    return redact.redact(photos.get_db(), a.get("uuid"), a.get("preset") or "hotel")
+    return redact.redact(None if a.get("path") else photos.get_db(), a.get("uuid"), a.get("preset") or "hotel", a.get("path"))
 
 
 def _id_guard(uuids):
@@ -170,8 +170,10 @@ def _guard(tool_name, args, **kwargs):
         return None if (args or {}).get("allow_original") is True else _id_guard(list(dict.fromkeys(u)))
     if tool_name == "lumina_redact":
         a = args or {}
-        if not isinstance(a.get("uuid"), str) or not photos.UUID_RE.fullmatch(a["uuid"]) or a.get("preset", "hotel") not in redact.PRESETS:
-            return {"action": "block", "message": "lumina_redact needs one photo uuid from a previous lumina_search and preset hotel, airline or all."}
+        u, f = a.get("uuid"), a.get("path")
+        one = (isinstance(u, str) and photos.UUID_RE.fullmatch(u) is not None and f is None) or (u is None and isinstance(f, str) and redact.image_file(f) is not None)
+        if not one or a.get("preset", "hotel") not in redact.PRESETS:
+            return {"action": "block", "message": "lumina_redact needs exactly one of a photo uuid from a previous lumina_search or the path of an existing image file, and preset hotel, airline or all."}
         return None
     if tool_name == "lumina_read_text":
         u = (args or {}).get("uuids")
@@ -387,9 +389,11 @@ _SCHEMAS = {
                        "or when the user asks to hide/redact/cover details. Pick `preset` from the recipient: hotel/landlord -> hotel, airline/check-in -> airline, "
                        "anyone else or unsure -> all. Put the returned `media` line on its own line in your reply (messaging) or the `display` line (desktop); "
                        "Lumina adds whichever fits if you forget. Tell the user in one sentence what was hidden by kind (never the values) and that Lumina "
-                       "re-read the copy and 0 sensitive items remain. If it errors, do NOT fall back to sending the original.",
-        "parameters": {"type": "object", "required": ["uuid"], "properties": {
+                       "re-read the copy and 0 sensitive items remain. If it errors, do NOT fall back to sending the original. "
+                       "Give `path` (an existing image file) instead of `uuid` for a file that is not in Photos.",
+        "parameters": {"type": "object", "properties": {
             "uuid": {**_STR, "description": "Photo uuid from lumina_search"},
+            "path": {**_STR, "description": "Absolute path of an image file, instead of uuid"},
             "preset": {**_STR, "enum": ["hotel", "airline", "all"], "description": "Default hotel"},
         }},
     },
