@@ -86,7 +86,12 @@ def test_search_odd_photos_and_detected_text(tmp_path, monkeypatch):
                  screenshot=False, path=None, path_derivatives=None, detected_text=lambda: [])
         return NS(**{**d, **kw})
 
-    passport = fake("P", detected_text=lambda: [("PASSPORT No 123", 0.9)])
+    f = tmp_path / "p.jpg"
+    f.write_bytes(b"x")
+    from lumina import redact
+
+    monkeypatch.setattr(redact, "ocr_boxes", lambda path: [NS(text="PASSPORT No 123")])
+    passport = fake("P", path=str(f))
     odd = fake("O")  # every optional field None
     db = NS(photos=lambda movies=True: [odd, passport])
     r = photos.search(db, text="passport")
@@ -95,25 +100,25 @@ def test_search_odd_photos_and_detected_text(tmp_path, monkeypatch):
     assert photos.photo_dict(odd)["labels"] == []
 
 
-def test_ocr_cache(tmp_path):
+def test_ocr_cache(tmp_path, monkeypatch):
     import datetime as dt
     from types import SimpleNamespace as NS
 
+    from lumina import redact
+
     photos.set_cache_dir(tmp_path)
     calls = []
-
-    def ocr():
-        calls.append(1)
-        return [("PASSPORT", 0.9)]
-
-    p = NS(uuid="A", ismovie=False, date_modified=dt.datetime(2024, 1, 1), fingerprint="f", detected_text=ocr)
+    monkeypatch.setattr(redact, "ocr_boxes", lambda path: calls.append(1) or [NS(text="PASSPORT")])
+    f = tmp_path / "a.jpg"
+    f.write_bytes(b"x")
+    p = NS(uuid="A", ismovie=False, date_modified=dt.datetime(2024, 1, 1), fingerprint="f", path=str(f), path_derivatives=None)
     try:
         assert photos.ocr_text(p) == ["PASSPORT"] and photos.ocr_text(p) == ["PASSPORT"]
         assert len(calls) == 1  # second call served from sqlite
         p.date_modified = dt.datetime(2024, 2, 1)  # edited: cache invalidated
         photos.ocr_text(p)
         assert len(calls) == 2
-        v = NS(uuid="V", ismovie=True, detected_text=ocr)
+        v = NS(uuid="V", ismovie=True, path=str(f))
         assert photos.ocr_text(v) == [] and len(calls) == 2  # videos skipped
         (tmp_path / "ocr.sqlite").write_bytes(b"garbage")  # corrupt cache: log, still answer
         assert photos.ocr_text(p) == ["PASSPORT"]
@@ -339,22 +344,42 @@ def test_snippet_skips_recognition_for_untokenised_in_indexed_library(monkeypatc
     assert calls == ["U0"]  # only the photo with Apple tokens
 
 
-def test_derivative_fallback(monkeypatch, tmp_path):
+def test_recognise_never_uses_detected_text(monkeypatch, tmp_path):
     from types import SimpleNamespace as NS
 
     from lumina import redact
 
-    small, big = tmp_path / "s.jpg", tmp_path / "b.jpg"
+    def boom():
+        raise AssertionError("detected_text() writes an xattr into the Photos library")
+
+    small, big, orig = tmp_path / "s.jpg", tmp_path / "b.jpg", tmp_path / "o.jpg"
     small.write_bytes(b"1")
     big.write_bytes(b"12345")
+    orig.write_bytes(b"123456789")
     seen = []
-    monkeypatch.setattr(redact, "ocr_boxes", lambda path: seen.append(path) or [NS(text="Hello")])
-    p = _ix("D", None, path=None, path_derivatives=[str(small), str(big), str(tmp_path / "gone.jpg")],
-            detected_text=lambda: [("nope", 1)])
-    assert photos.ocr_text(p) == ["Hello"] and seen == [str(big)]
-    p.path = str(big)  # original on disk: Apple's own call
-    p.uuid = "D2"
-    assert photos.ocr_text(p) == ["nope"]
+    monkeypatch.setattr(redact, "ocr_boxes", lambda path: seen.append(str(path)) or [NS(text="Hello")])
+    ders = [str(small), str(big), str(tmp_path / "gone.jpg")]
+    p = _ix("D", None, path=None, path_derivatives=ders, detected_text=boom)
+    assert photos.ocr_text(p) == ["Hello"] and seen == [str(big)]  # original missing: largest derivative
+    p2 = _ix("D2", None, path=str(orig), path_derivatives=ders, detected_text=boom)
+    assert photos.ocr_text(p2) == ["Hello"] and seen[-1] == str(orig)  # original preferred
+    p3 = _ix("D3", None, path=str(tmp_path / "gone.jpg"), path_derivatives=None, detected_text=boom)
+    n = len(seen)
+    assert photos.ocr_text(p3) == [] and len(seen) == n  # nothing on disk
+
+
+def test_snippet_for_tokenless_photo_read_live(monkeypatch, tmp_path):
+    from types import SimpleNamespace as NS
+
+    from lumina import redact
+
+    calls = []
+    monkeypatch.setattr(redact, "ocr_boxes", lambda path: calls.append(1) or [NS(text="Gate 12")])
+    f = tmp_path / "r.jpg"
+    f.write_bytes(b"x")
+    db = NS(photos=lambda movies=True: [_ix("I", ["a"]), _ix("R", [], days_old=1, path=str(f))])
+    out = photos.search(db, text="gate")["photos"]
+    assert [x["uuid"] for x in out] == ["R"] and out[0]["text_snippet"] == "Gate 12" and len(calls) == 1  # snippet from cache
 
 
 def test_expiry_prefilter_and_unindexed_budget(monkeypatch):

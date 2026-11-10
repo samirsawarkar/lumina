@@ -26,10 +26,17 @@ def _luhn(digits: str) -> bool:
     return s % 10 == 0
 
 
+def _id_types(p) -> bool:
+    try:
+        return bool(p.search_info.id_document_types)
+    except Exception:  # None search_info, or a property that raises: not a candidate this way
+        return False
+
+
 def _hint(p, toks) -> bool:
     t = set(toks)
     return bool(t & _WORDS or {"wi", "fi"} <= t or {"id", "card"} <= t or {"valid", "thru"} <= t
-                or getattr(getattr(p, "search_info", None), "id_document_types", None))
+                or _id_types(p))
 
 
 def _labels(joined, names) -> int:
