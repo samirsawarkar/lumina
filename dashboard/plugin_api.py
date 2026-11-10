@@ -87,7 +87,7 @@ def redact_view(id: str = ""):
     elif meta.get("path"):  # source file of a path-based copy; the path itself is never returned
         try:
             f = Path(meta["path"])
-            if f.stat().st_size <= 30_000_000:
+            if f.suffix.lower() in (".jpg", ".jpeg", ".png", ".heic", ".heif", ".tif", ".tiff", ".webp", ".bmp", ".gif") and f.is_file() and f.stat().st_size <= 30_000_000:  # same rule as redact.image_file
                 with Image.open(f) as src:
                     src = ImageOps.exif_transpose(src).convert("RGB")
                 src.thumbnail((1024, 1024))
