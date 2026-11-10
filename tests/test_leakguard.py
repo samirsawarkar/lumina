@@ -55,6 +55,10 @@ def test_override_is_per_turn_and_user_only():
     assert blocked("terminal", c)
     lumina._route("don't send the original", session_id="s")
     assert blocked("terminal", c)
+    lumina._route("No, send the original", session_id="s")
+    assert not blocked("terminal", c)
+    lumina._route("not the original, the safe one", session_id="s")
+    assert blocked("terminal", c)
 
 
 def test_off_switch(monkeypatch):

@@ -21,7 +21,7 @@ _NAME_RE = re.compile(r"send|message|mail|upload|post|share|slack|telegram|disco
 _NET_RE = re.compile(r"\b(curl|wget|scp|sftp|rsync|ftp|nc|ncat|ssh|mail|mailx|sendmail|mutt|osascript|rclone|aws|gsutil|gh|base64|xxd|"
                      r"requests|urllib|httpx|smtplib|fetch)\b", re.I)
 _RAW_RE = re.compile(r"\b(original|unredacted|un-redacted|as is|anyway|without (?:hiding|redacting|blurring|covering))\b", re.I)
-_NO_RE = re.compile(r"\b(don'?t|do not|never|no)\b", re.I)
+_NO_RE = re.compile(r"\b(don'?t|not|never)\b", re.I)  # "No, send the original" is a yes to the original, so a bare "no" does not count
 _MAX_TEXT, _MAX_FILES = 200_000, 4
 _RAW = set()  # sessions whose user asked for the raw file THIS turn
 _CACHE = {}  # (real path, mtime_ns, size) -> document name or None
