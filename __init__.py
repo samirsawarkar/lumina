@@ -213,6 +213,7 @@ _SEND_RE = re.compile(r"\b(send|share|text|message|forward|whatsapp|telegram)\b"
 _MEMORY_RE = re.compile(r"\b(memory|memories|recap|slideshow|video|movie|film|montage|reel)\b", re.I)
 _HIDE_RE = re.compile(r"\b(hide|hiding|redact\w*|blur\w*|cover|censor\w*|mask\w*|safe|safely)\b", re.I)
 _IDDOC_RE = re.compile(r"\b(passport|id|licen[cs]e|card|visa|document|ticket|boarding pass|insurance|certificate)\b", re.I)
+_IMG_FILE_RE = re.compile(r"\.(jpe?g|png|heic|heif|tiff?|webp|bmp|gif)\b", re.I)  # "make a safe copy of ~/Desktop/IMG_0412.HEIC" names no document
 _SEND_ID_RE = re.compile(r"\b(send|share|forward|text|whatsapp|email)\b.*\b(passport|id|licen[cs]e|card)\b", re.I)
 _PRIVACY_RE = re.compile(r"\b(exposed|sensitive|private documents?|privacy check|check-?up|at risk|could leak)\b", re.I)
 _THIS_DAY_RE = re.compile(r"\bon this day\b", re.I)
@@ -338,7 +339,8 @@ def _route(user_message="", session_id="", platform="", **kwargs):
     _PENDING_MEDIA.pop(session_id, None)
     _REDACT_MEDIA.discard(session_id)
     leakguard.note_turn(session_id, user_message)
-    if isinstance(user_message, str) and ((_HIDE_RE.search(user_message) and _IDDOC_RE.search(user_message)) or _SEND_ID_RE.search(user_message)):
+    if isinstance(user_message, str) and ((_HIDE_RE.search(user_message) and (_IDDOC_RE.search(user_message) or _IMG_FILE_RE.search(user_message)))
+                                          or _SEND_ID_RE.search(user_message)):
         return {"context": _HINT + " " + _REDACT_HINT}
     if (isinstance(user_message, str) and _MEMORY_RE.search(user_message) and not _THIS_DAY_RE.search(user_message)
             and (_PHOTO_RE.search(user_message) or _TRIP_RE.search(user_message))):

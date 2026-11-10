@@ -273,3 +273,10 @@ def test_precise_classifier_monkeypatched(monkeypatch, lines, hit):
 
 def test_redact_guard_null_preset():
     assert lumina._guard("lumina_redact", {"path": str(FX / "passport.jpg"), "preset": None}) is None
+
+
+def test_safe_copy_of_a_plain_image_file_gets_the_redact_hint():
+    r = lumina._route("Make a safe copy of the image '/Users/me/Desktop/IMG_0412.HEIC' for a hotel", session_id="img")
+    assert r and "path=" in r["context"] and "lumina_redact" in r["context"]
+    r = lumina._route("Show my photos from 2024", session_id="img")
+    assert not (r and "path=" in r["context"])
