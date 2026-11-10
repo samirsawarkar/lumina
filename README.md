@@ -37,6 +37,8 @@ Your photos are deeply personal. Lumina is built with a strict privacy architect
 - **No cloud, no API keys:** Lumina itself makes no network requests and needs no accounts. Photos leave your Mac only when you ask Hermes to send one to your phone: that photo is then delivered through the messaging app you chose (Telegram, WhatsApp, …).
 - **Uses Apple Photos' on-device analysis:** Powered by `osxphotos`, Lumina reads the faces, scene labels, and OCR text that macOS has already indexed locally on your device.
 - **Never deletes photos:** Lumina is strictly read-only, with the single exception of creating new albums in Apple Photos when you explicitly ask. There is no delete or cleanup capability.
+- **Never writes into your photo files:** Text Lumina reads from a photo is kept only in its own cache inside the Hermes data folder on your Mac. Nothing is attached to or changed in the files of your Photos library.
+- **iPhone photos work as they are:** HEIC photos are read directly; safe copies are saved as JPEG.
 - **Local thumbnails only:** Image previews are generated on demand and served only to your local Hermes Desktop window over a local loopback connection (`localhost`).
 
 ### What the AI sees (and what it doesn't)
