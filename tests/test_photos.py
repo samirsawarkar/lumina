@@ -371,6 +371,7 @@ def test_expiry_prefilter_and_unindexed_budget(monkeypatch):
     assert "partial" not in r
     calls.clear()
     monkeypatch.setattr(photos, "index_words", lambda p: [])  # no Apple index: everything read, budget applies
+    db = NS(photos=lambda movies=True: ps)  # new db object: the has-index answer is cached per db
     assert len(photos.expiry(db, today=date(2026, 11, 8))["items"]) == 4 and len(calls) == 6
     monkeypatch.setattr(photos, "EXPIRY_BUDGET", -1)
     r = photos.expiry(db, today=date(2026, 11, 8))
@@ -389,3 +390,37 @@ def test_expiry_hint_is_tight():
         assert h(ok), ok
     for no in (["experience"], ["express"], ["explore"], ["export"], ["valid"], ["use"], ["good"], ["by"], ["thru"], ["use", "good"]):
         assert not h(no), no
+
+
+def test_in_index_fast_on_nested_tokens():
+    import time
+
+    t0 = time.monotonic()
+    assert photos._in_index(["a" * 200 + "b"], ["aa", "aaa", "aaaa"]) is False
+    assert photos._in_index(["a" * 200], ["aa", "aaa", "aaaa"]) is True
+    assert time.monotonic() - t0 < 0.5
+
+
+def test_corrupt_cache_row_is_a_miss(monkeypatch, tmp_path):
+    import sqlite3
+    from types import SimpleNamespace as NS
+
+    c = sqlite3.connect(tmp_path / "ocr.sqlite")
+    c.execute("CREATE TABLE ocr (uuid TEXT PRIMARY KEY, sig TEXT, text TEXT)")
+    c.execute("INSERT INTO ocr VALUES ('B', '|', 'not json')")
+    c.commit()
+    c.close()
+    calls = _live(monkeypatch, {"G": ["gate 4"]})
+    db = NS(photos=lambda movies=True: [_ix("B", ["x"]), _ix("G", ["x"])])
+    assert _uu(db, text="gate") == []  # indexed library, bad row = miss, no crash; Apple's index had no match
+
+
+def test_has_index_computed_once_per_db(monkeypatch):
+    from types import SimpleNamespace as NS
+
+    n = []
+    monkeypatch.setattr(photos, "index_words", lambda p: n.append(1) or [])
+    db = NS(photos=lambda movies=True: [_ix("A", []), _ix("B", [])])
+    photos.search(db, date_from="2020-01-01")
+    photos.search(db, date_from="2020-01-01")
+    assert len(n) <= 4  # one full pass (2 photos) + one snippet check per photo on the first search only

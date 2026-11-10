@@ -61,6 +61,21 @@ def test_privacy_check_two_stage_no_values(monkeypatch):
     blob = json.dumps(r)
     for secret in ("X1234567", "blue-mango", "4821", "4111", "SAMPLE", "ALEX", "1990", "SunnyDays"):
         assert secret not in blob
+    for line in (l for v in texts.values() for l in v if l != "PASSPORT"):  # no recognised line, whole or in part, appears anywhere
+        assert line not in blob and (len(line) < 6 or line.title() not in blob), line
+    assert r["source"] == "apple_index" and "Apple Photos has already recognised" in r["note"]
+
+
+def test_document_is_fixed_vocabulary(monkeypatch):
+    holder = ["ALEX SAMPLE - SUNSHINE LTD", "4111 1111 1111 1111", "VALID THRU 12/29"]
+    monkeypatch.setattr(photos, "ocr_text", lambda p: holder)
+    r = privacy.privacy_check(NS(photos=lambda movies=True: [_p("C", ["visa"])]))
+    assert r["items"][0]["kind"] == "card" and r["items"][0]["document"] == "Payment card"
+    blob = json.dumps(r).lower()
+    for part in ("alex", "sample", "sunshine", "ltd", "4111"):
+        assert part not in blob
+    assert privacy._document("id", ["Driving Licence", "x"]) == "Driving Licence"
+    assert privacy._document("passport", ["ALEX SAMPLE"]) == "Passport"
 
 
 def test_privacy_check_limits(monkeypatch):
@@ -68,14 +83,14 @@ def test_privacy_check_limits(monkeypatch):
     monkeypatch.setattr(privacy, "MAX_CANDIDATES", 2)
     ps = [_p(f"U{i}", ["password"]) for i in range(5)]
     r = privacy.privacy_check(NS(photos=lambda movies=True: ps))
-    assert r["partial"] is True and r["count"] == 2 and "2 of 5" in r["note"]
+    assert r["partial"] is True and r["count"] == 2 and "2 of 5" in r["note"] and r["source"] == "apple_index"
     monkeypatch.setattr(privacy, "MAX_CANDIDATES", 150)
     monkeypatch.setattr(privacy, "BUDGET", -1)
     assert privacy.privacy_check(NS(photos=lambda movies=True: ps))["count"] == 0
     # no Apple index at all: newest photos are read, bounded, and marked partial
     monkeypatch.setattr(privacy, "BUDGET", 20.0)
     r = privacy.privacy_check(NS(photos=lambda movies=True: [_p("A", None), _p("B", None)]))
-    assert r["count"] == 2 and r["scanned"] == 2 and r["partial"] is False
+    assert r["count"] == 2 and r["scanned"] == 2 and r["partial"] is False and r["source"] == "live" and "note" not in r
 
 
 def test_progress_across_runs(monkeypatch):
@@ -86,7 +101,7 @@ def test_progress_across_runs(monkeypatch):
     r1 = privacy.privacy_check(db)
     assert r1["partial"] is True and r1["checked"] == 120 and r1["candidates"] == 200 and "120 of 200" in r1["note"]
     r2 = privacy.privacy_check(db)  # the first 120 come from the cache for free
-    assert r2["partial"] is False and r2["checked"] == 200 and r2["count"] == 200 and "note" not in r2
+    assert r2["partial"] is False and r2["checked"] == 200 and r2["count"] == 200 and "Checked" not in r2["note"]
 
 
 @vision

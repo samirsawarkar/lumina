@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 import time
 
@@ -58,30 +57,42 @@ def kind_of(lines: list[str]) -> str | None:
     return None
 
 
+def _document(kind, lines) -> str:
+    """Fixed vocabulary only: a document-type word from redact's list, else a per-kind name. Never recognised free text."""
+    if kind in ("passport", "id"):
+        for m in redact._DOC_TYPE_RE.finditer(" ".join(lines)):
+            if kind == "passport" and m.group(0).lower() == "passport" or kind == "id" and _ID_RE.search(m.group(0)):
+                return m.group(0).title()
+    return {"passport": "Passport", "card": "Payment card", "password": "Password", "id": "ID document"}[kind]
+
+
 def privacy_check(db) -> dict:
     t0 = time.monotonic()
     ps = sorted((p for p in db.photos(movies=True) if not (p.hidden or p.intrash or p.ismovie)), key=photos._ts, reverse=True)
-    indexed = photos._has_index(ps)
+    indexed = photos._has_index(db, ps)
     # ponytail: without Apple's index this reads only the newest photos until the budget runs out (partial)
-    cands = [p for p in ps if not indexed or _hint(p, photos.index_words(p)) or (not photos.index_words(p) and photos._recent(p))]
+    cands = [p for p in ps for t in [photos.index_words(p) if indexed else ()] if not indexed or _hint(p, t) or (not t and photos._recent(p))]
     cache, items, new, checked = photos._load_cache(), [], 0, 0
     for p in cands:  # newest first; cached photos are free, only new recognitions count against the caps
-        row = cache.get(p.uuid)
-        cached = bool(row and row[0] == photos._sig(p))
+        lines = photos._cached_lines(cache, p)
+        cached = lines is not None
         if not cached and (new >= MAX_CANDIDATES or time.monotonic() - t0 > BUDGET):
             continue
         checked += 1
         new += not cached
         try:
-            lines = json.loads(row[1]) if cached else photos.ocr_text(p)
+            lines = lines if cached else photos.ocr_text(p)
             k = kind_of(lines)
             if k:
-                items.append({"uuid": p.uuid, "kind": k, "document": redact.safe_name(lines), "date": p.date.isoformat() if p.date else None})
+                items.append({"uuid": p.uuid, "kind": k, "document": _document(k, lines), "date": p.date.isoformat() if p.date else None})
         except Exception:
             continue
     partial = checked < len(cands)
+    notes = ([f"Checked {checked} of {len(cands)} likely documents, newest first; say so, and asking again continues."] if partial else []) + (
+        ["Lumina checked the text Apple Photos has already recognised, so very new photos or a library Apple is still processing may not be fully covered."]
+        if indexed else [])
     groups = [{"kind": k, "label": LABELS[k], "count": n} for k in LABELS if (n := sum(i["kind"] == k for i in items))]
     return {"scanned": len(ps) if indexed else checked, "count": len(items), "groups": groups, "items": items,
             "all_uuids": [i["uuid"] for i in items[:200]], "partial": partial,
-            "checked": checked, "candidates": len(cands),
-            **({"note": f"Checked {checked} of {len(cands)} likely documents, newest first; say so, and asking again continues."} if partial else {})}
+            "checked": checked, "candidates": len(cands), "source": "apple_index" if indexed else "live",
+            **({"note": " ".join(notes)} if notes else {})}
