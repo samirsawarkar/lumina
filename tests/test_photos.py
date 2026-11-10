@@ -90,7 +90,7 @@ def test_search_odd_photos_and_detected_text(tmp_path, monkeypatch):
     f.write_bytes(b"x")
     from lumina import redact
 
-    monkeypatch.setattr(redact, "ocr_boxes", lambda path: [NS(text="PASSPORT No 123")])
+    monkeypatch.setattr(redact, "ocr_boxes", lambda path, correct=False: [NS(text="PASSPORT No 123")])
     passport = fake("P", path=str(f))
     odd = fake("O")  # every optional field None
     db = NS(photos=lambda movies=True: [odd, passport])
@@ -108,7 +108,7 @@ def test_ocr_cache(tmp_path, monkeypatch):
 
     photos.set_cache_dir(tmp_path)
     calls = []
-    monkeypatch.setattr(redact, "ocr_boxes", lambda path: calls.append(1) or [NS(text="PASSPORT")])
+    monkeypatch.setattr(redact, "ocr_boxes", lambda path, correct=False: calls.append(1) or [NS(text="PASSPORT")])
     f = tmp_path / "a.jpg"
     f.write_bytes(b"x")
     p = NS(uuid="A", ismovie=False, date_modified=dt.datetime(2024, 1, 1), fingerprint="f", path=str(f), path_derivatives=None)
@@ -357,7 +357,7 @@ def test_recognise_never_uses_detected_text(monkeypatch, tmp_path):
     big.write_bytes(b"12345")
     orig.write_bytes(b"123456789")
     seen = []
-    monkeypatch.setattr(redact, "ocr_boxes", lambda path: seen.append(str(path)) or [NS(text="Hello")])
+    monkeypatch.setattr(redact, "ocr_boxes", lambda path, correct=False: seen.append(str(path)) or [NS(text="Hello")])
     ders = [str(small), str(big), str(tmp_path / "gone.jpg")]
     p = _ix("D", None, path=None, path_derivatives=ders, detected_text=boom)
     assert photos.ocr_text(p) == ["Hello"] and seen == [str(big)]  # original missing: largest derivative
@@ -374,7 +374,7 @@ def test_snippet_for_tokenless_photo_read_live(monkeypatch, tmp_path):
     from lumina import redact
 
     calls = []
-    monkeypatch.setattr(redact, "ocr_boxes", lambda path: calls.append(1) or [NS(text="Gate 12")])
+    monkeypatch.setattr(redact, "ocr_boxes", lambda path, correct=False: calls.append(1) or [NS(text="Gate 12")])
     f = tmp_path / "r.jpg"
     f.write_bytes(b"x")
     db = NS(photos=lambda movies=True: [_ix("I", ["a"]), _ix("R", [], days_old=1, path=str(f))])
@@ -449,3 +449,13 @@ def test_has_index_computed_once_per_db(monkeypatch):
     photos.search(db, date_from="2020-01-01")
     photos.search(db, date_from="2020-01-01")
     assert len(n) <= 4  # one full pass (2 photos) + one snippet check per photo on the first search only
+
+
+def test_indexed_search_partial_note_is_about_recent_photos(monkeypatch):
+    from types import SimpleNamespace as NS
+
+    _live(monkeypatch, {"R": ["gate 12"]})
+    monkeypatch.setattr(photos, "RECENT_BUDGET", -1)
+    db = NS(photos=lambda movies=True: [_ix("I", ["a"]), _ix("R", [], days_old=1)])
+    r = photos.search(db, text="gate")
+    assert r["text_scan"] == "partial" and "last few days" in r["note"] and "part of the library" not in r["note"]
