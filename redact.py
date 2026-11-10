@@ -88,7 +88,7 @@ def _pixel_size(path):
             return im.size
 
 
-def ocr_boxes(path) -> list[Line]:
+def ocr_boxes(path, correct=False) -> list[Line]:
     """Apple Vision OCR (accurate) with pixel boxes. Imports Vision lazily; raises LuminaError when unavailable."""
     try:
         import Vision
@@ -98,7 +98,7 @@ def ocr_boxes(path) -> list[Line]:
     w, h = _pixel_size(path)
     req = Vision.VNRecognizeTextRequest.alloc().init()
     req.setRecognitionLevel_(0)
-    req.setUsesLanguageCorrection_(False)
+    req.setUsesLanguageCorrection_(correct)  # False for redaction (exact characters), True for reading
     handler = Vision.VNImageRequestHandler.alloc().initWithURL_options_(NSURL.fileURLWithPath_(str(path)), None)
     ok, _ = handler.performRequests_error_([req], None)
     if not ok:

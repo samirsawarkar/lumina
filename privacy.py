@@ -9,8 +9,6 @@ from . import photos, redact
 
 MAX_CANDIDATES, BUDGET = 150, 20.0  # stage-2 recognitions, seconds
 # Stage 1: Apple-index tokens that hint at an identity or secret document (a superset; stage 2 confirms).
-_WORDS = {"passport", "licence", "license", "identity", "permit", "visa", "password", "passcode", "pin", "wifi",
-          "mastercard", "amex", "debit", "credit", "cvv", "cvc"}  # plus id+card, wi+fi, valid+thru
 _ID_RE = re.compile(r"licen[cs]e|identity|id card|permit|visa", re.I)
 _CARD_RE = re.compile(r"(?<!\d)\d(?:[ \-]?\d){12,18}(?!\d)")
 _CARD_WORD = re.compile(r"\b(visa|mastercard|amex|american express|debit|credit|valid\s+thru|good\s+thru|cvv|cvc|cardholder)\b|(?<!\d)(0[1-9]|1[0-2])\s*/\s*\d{2}(\d{2})?(?!\d)", re.I)
@@ -33,10 +31,24 @@ def _id_types(p) -> bool:
         return False
 
 
+_PP_TOK = {"surname", "given", "nationality", "birth", "issue", "expiry", "authority", "sex"}
+_ID_TOK = {"surname", "name", "names", "nationality", "sex", "address", "issued", "issue", "expires", "expiry", "class"}
+_CARD_TOK = {"visa", "mastercard", "amex", "debit", "credit", "cvv", "cvc", "cardholder", "card"}
+
+
 def _hint(p, toks) -> bool:
+    """Stage 1, per kind at token level (a superset of what kind_of needs). `toks` are Apple's lowercase word tokens."""
     t = set(toks)
-    return bool(t & _WORDS or {"wi", "fi"} <= t or {"id", "card"} <= t or {"valid", "thru"} <= t
-                or _id_types(p))
+    nums = {x for x in t if x.isdigit() and 4 <= len(x) <= 16}
+    # ponytail: an MRZ-only passport (no word 'passport' in the text) is missed here
+    return bool(
+        "passport" in t and len(t & _PP_TOK) >= 2
+        or (t & {"licence", "license", "identity", "permit", "visa"} or {"id", "card"} <= t)
+        and (t & {"birth", "dob", "born"} or len(t & _ID_TOK) >= 2)
+        or (t & _CARD_TOK or {"valid", "thru"} <= t or {"good", "thru"} <= t or {"american", "express"} <= t)
+        and (len(nums) >= 2 or any(len(x) in (15, 16) for x in nums))
+        or t & {"password", "passcode", "pin"} and (t & {"wifi", "network", "ssid"} or {"wi", "fi"} <= t or any(c.isdigit() for x in t for c in x))
+        or _id_types(p))
 
 
 def _labels(joined, names) -> int:
@@ -78,13 +90,19 @@ def privacy_check(db) -> dict:
     ps = sorted((p for p in db.photos(movies=True) if not (p.hidden or p.intrash or p.ismovie)), key=photos._ts, reverse=True)
     indexed = photos._has_index(db, ps)
     # ponytail: without Apple's index this reads only the newest photos until the budget runs out (partial)
-    cands = [p for p in ps for t in [photos.index_words(p) if indexed else ()] if not indexed or _hint(p, t) or (not t and photos._recent(p))]
-    cache, items, new, checked = photos._load_cache(), [], 0, 0
-    for p in cands:  # newest first; cached photos are free, only new recognitions count against the caps
+    order = [(p, False) for p in ps]
+    if indexed:  # document-hinted photos first (newest first), then recent ones Apple has not indexed yet, with a small allowance
+        order = [(p, False) for p in ps if _hint(p, photos.index_words(p))] + [(p, True) for p in ps if not photos.index_words(p) and photos._recent(p)]
+    cache, items, new, checked, rt, late_skipped, hint_skipped = photos._load_cache(), [], 0, 0, None, False, False
+    for p, late in order:  # cached photos are free, only new recognitions count against the caps
         lines = photos._cached_lines(cache, p)
         cached = lines is not None
-        if not cached and (new >= MAX_CANDIDATES or time.monotonic() - t0 > BUDGET):
-            continue
+        if not cached:
+            now = time.monotonic()
+            rt = rt or now if late else rt
+            if new >= MAX_CANDIDATES or now - t0 > BUDGET or late and now - rt > photos.RECENT_BUDGET:
+                late_skipped, hint_skipped = late_skipped or late, hint_skipped or not late
+                continue
         checked += 1
         new += not cached
         try:
@@ -94,8 +112,10 @@ def privacy_check(db) -> dict:
                 items.append({"uuid": p.uuid, "kind": k, "document": _document(k, lines), "date": p.date.isoformat() if p.date else None})
         except Exception:
             continue
+    cands = order
     partial = checked < len(cands)
-    notes = ([f"Checked {checked} of {len(cands)} likely documents, newest first; say so, and asking again continues."] if partial else []) + (
+    notes = ([photos.RECENT_NOTE if late_skipped and not hint_skipped else
+              f"Checked {checked} of {len(cands)} likely documents, newest first; say so, and asking again continues."] if partial else []) + (
         ["Lumina checked the text Apple Photos has already recognised, so very new photos or a library Apple is still processing may not be fully covered."]
         if indexed else [])
     groups = [{"kind": k, "label": LABELS[k], "count": n} for k in LABELS if (n := sum(i["kind"] == k for i in items))]

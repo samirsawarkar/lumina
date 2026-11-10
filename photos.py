@@ -106,7 +106,7 @@ def _recognise(p) -> list[str]:
         return []
     from . import redact  # lazy: redact imports photos
 
-    return [l.text for l in redact.ocr_boxes(src)]
+    return [l.text for l in redact.ocr_boxes(src, correct=True)]
 
 
 def _load_cache() -> dict:
@@ -151,6 +151,8 @@ def ocr_text(p) -> list[str]:
 
 # ---- Apple's own text index (osxphotos search_info): lowercase single-word tokens, instant to read ----
 SEARCH_BUDGET, EXPIRY_BUDGET, RECENT = 6.0, 20.0, dt.timedelta(days=3)  # seconds, seconds, "maybe not indexed yet"
+RECENT_BUDGET = 3.0  # seconds for live reads of recent photos Apple has not indexed yet, when the library has an index
+RECENT_NOTE = "Some photos added in the last few days have not been read yet; say so, and repeating the request continues."
 
 
 def index_words(p) -> list[str]:
@@ -313,8 +315,9 @@ def search(db, text=None, person=None, place=None, label=None, date_from=None, d
                     continue
         hits.append(p)
     partial = False
+    t1 = time.monotonic()
     for p in sorted(pending, key=_ts, reverse=True):  # bounded live recognition; results fill the cache for next time
-        if time.monotonic() - t0 > SEARCH_BUDGET:
+        if time.monotonic() - t1 > RECENT_BUDGET if indexed else time.monotonic() - t0 > SEARCH_BUDGET:
             partial = True
             break
         try:
@@ -325,7 +328,7 @@ def search(db, text=None, person=None, place=None, label=None, date_from=None, d
     hits.sort(key=_ts, reverse=True)
     return {"count": min(len(hits), limit), "total_matches": len(hits),
             "photos": [photo_dict(p, indexed) for p in hits[:limit]], "all_uuids": [p.uuid for p in hits[:200]],
-            **({"text_scan": "partial", "note": "Only part of the library was read for text this time; say so, and a repeat search will cover more."}
+            **({"text_scan": "partial", "note": RECENT_NOTE if indexed else "Only part of the library was read for text this time; say so, and a repeat search will cover more."}
                if partial else {}),
             **({"by_year": {str(y): sum(1 for p in hits if p.date.year == y)
                             for y in sorted({p.date.year for p in hits}, reverse=True)}} if on_day else {})}
@@ -556,16 +559,18 @@ def _exp_hint(toks) -> bool:
 def expiry(db, within_days=None, today=None) -> dict:
     """Documents with an expiry date in OCR text, soonest first; expired ones have negative days_left."""
     today = today or dt.date.today()
-    t0, items, partial = time.monotonic(), [], False
+    t0, items, partial, late_cut, rt = time.monotonic(), [], False, False, None
     ps = sorted((p for p in db.photos(movies=False) if not (p.hidden or p.intrash or p.ismovie)), key=_ts, reverse=True)
     indexed = _has_index(db, ps)
-    for p in ps:
-        if indexed:  # a missed keyword hides a document, so the set is a superset; unindexed recent photos are read live
-            toks = index_words(p)
-            if toks and not _exp_hint(toks) or not toks and not _recent(p):
-                continue
-        if time.monotonic() - t0 > EXPIRY_BUDGET:
-            partial = True
+    order = [(p, False) for p in ps]
+    if indexed:  # a missed keyword hides a document, so the set is a superset; document-hinted photos first, then
+        # recent photos Apple has not indexed yet, under their own small allowance
+        order = [(p, False) for p in ps if (t := index_words(p)) and _exp_hint(t)] + [(p, True) for p in ps if not index_words(p) and _recent(p)]
+    for p, late in order:
+        now = time.monotonic()
+        rt = rt or now if late else rt
+        if now - t0 > EXPIRY_BUDGET or late and now - rt > RECENT_BUDGET:
+            partial, late_cut = True, late_cut or late and now - t0 <= EXPIRY_BUDGET
             break
         try:
             lines = ocr_text(p)
@@ -581,7 +586,7 @@ def expiry(db, within_days=None, today=None) -> dict:
         items = [i for i in items if i["days_left"] <= within_days]
     items.sort(key=lambda i: i["expires"])
     return {"count": len(items), "items": items, "all_uuids": [i["uuid"] for i in items[:200]],
-            **({"partial": True, "note": "Only part of the library was read this time; say so, and ask again to cover more."} if partial else {})}
+            **({"partial": True, "note": RECENT_NOTE if late_cut else "Only part of the library was read this time; say so, and ask again to cover more."} if partial else {})}
 
 
 # ---- "Make me a memory": Ken Burns slideshow (MP4 via ffmpeg, GIF fallback) ----

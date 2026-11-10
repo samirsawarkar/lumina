@@ -38,6 +38,9 @@ def test_kinds():
     assert k(["DRIVING LICENCE", "Surname: SAMPLE", "Class: B"]) == "id"
 
 
+PT = ["passport", "surname", "nationality"]
+
+
 def _p(uuid, toks, days=30, **kw):
     import datetime as dt
 
@@ -49,9 +52,9 @@ def test_privacy_check_two_stage_no_values(monkeypatch):
     texts = {"P": PASSPORT, "W": WIFI, "C": CARD, "G": GYM, "R": RECEIPT, "N": ["sky"]}
     read = []
     monkeypatch.setattr(photos, "ocr_text", lambda p: read.append(p.uuid) or texts[p.uuid])
-    ps = [_p("P", ["passport", "alex"]), _p("W", ["wi", "fi", "blue"]), _p("C", ["credit", "4111"]), _p("G", ["gym", "member"]),
-          _p("R", ["total"]), _p("N", []), _p("H", ["passport"], hidden=True), _p("T", ["passport"], intrash=True),
-          _p("M", ["passport"], ismovie=True)]
+    ps = [_p("P", ["passport", "surname", "nationality"]), _p("W", ["password", "wi", "fi", "blue"]), _p("C", ["credit", "4111", "1111"]), _p("G", ["gym", "member"]),
+          _p("R", ["total"]), _p("N", []), _p("H", PT, hidden=True), _p("T", PT, intrash=True),
+          _p("M", PT, ismovie=True)]
     r = privacy.privacy_check(NS(photos=lambda movies=True: ps))
     assert sorted(read) == ["C", "P", "W"]  # stage 1 only lets hinted, visible photos through
     assert {i["uuid"]: i["kind"] for i in r["items"]} == {"P": "passport", "W": "password", "C": "card"}
@@ -69,7 +72,7 @@ def test_privacy_check_two_stage_no_values(monkeypatch):
 def test_document_is_fixed_vocabulary(monkeypatch):
     holder = ["ALEX SAMPLE - SUNSHINE LTD", "4111 1111 1111 1111", "VALID THRU 12/29"]
     monkeypatch.setattr(photos, "ocr_text", lambda p: holder)
-    r = privacy.privacy_check(NS(photos=lambda movies=True: [_p("C", ["visa"])]))
+    r = privacy.privacy_check(NS(photos=lambda movies=True: [_p("C", ["visa", "4111", "1111"])]))
     assert r["items"][0]["kind"] == "card" and r["items"][0]["document"] == "Payment card"
     blob = json.dumps(r).lower()
     for part in ("alex", "sample", "sunshine", "ltd", "4111"):
@@ -81,7 +84,7 @@ def test_document_is_fixed_vocabulary(monkeypatch):
 def test_privacy_check_limits(monkeypatch):
     monkeypatch.setattr(photos, "ocr_text", lambda p: WIFI)
     monkeypatch.setattr(privacy, "MAX_CANDIDATES", 2)
-    ps = [_p(f"U{i}", ["password"]) for i in range(5)]
+    ps = [_p(f"U{i}", ["password", "wi", "fi"]) for i in range(5)]
     r = privacy.privacy_check(NS(photos=lambda movies=True: ps))
     assert r["partial"] is True and r["count"] == 2 and "2 of 5" in r["note"] and r["source"] == "apple_index"
     monkeypatch.setattr(privacy, "MAX_CANDIDATES", 150)
@@ -96,7 +99,7 @@ def test_privacy_check_limits(monkeypatch):
 def test_progress_across_runs(monkeypatch):
     monkeypatch.setattr(photos, "_recognise", lambda p: WIFI)
     monkeypatch.setattr(privacy, "MAX_CANDIDATES", 120)
-    ps = [_p(f"U{i}", ["password"], date_modified=None, fingerprint=None) for i in range(200)]
+    ps = [_p(f"U{i}", ["password", "wi", "fi"], date_modified=None, fingerprint=None) for i in range(200)]
     db = NS(photos=lambda movies=True: ps)
     r1 = privacy.privacy_check(db)
     assert r1["partial"] is True and r1["checked"] == 120 and r1["candidates"] == 200 and "120 of 200" in r1["note"]
@@ -156,4 +159,55 @@ def test_hint_survives_raising_search_info():
         def search_info(self):
             raise RuntimeError("boom")
 
-    assert privacy._hint(Bad(), []) is False and privacy._hint(Bad(), ["passport"]) is True
+    assert privacy._hint(Bad(), []) is False and privacy._hint(Bad(), PT) is True
+
+
+POSITIVES = [PASSPORT, ["PASSPORT", "Surname: SAMPLE", "Nationality: UTOPIAN"], WIFI, ["Wi-Fi password:", "blue-mango"], CARD,
+             ["Card 4111 1111 1111 1111", "12/29"], ["AMEX 3782 822463 10005"], LICENCE, ["DRIVING LICENCE", "Surname: SAMPLE", "Class: B"],
+             ["Password: hunter2"]]
+
+
+def _tokens(lines):
+    import re
+
+    return sorted({t for l in lines for t in re.split(r"[^a-z0-9]+", l.lower()) if t})
+
+
+def test_hint_is_a_superset_of_kind_of():
+    for lines in POSITIVES:
+        assert privacy.kind_of(lines), lines
+        assert privacy._hint(_p("X", []), _tokens(lines)), lines
+
+
+@vision
+@pytest.mark.parametrize("name", ["passport", "wifi-password", "gym-membership", "grocery-receipt", "boarding-pass", "vaccination-card"])
+def test_hint_superset_on_real_fixtures(name):
+    lines = [l.text for l in redact.ocr_boxes(FX / f"{name}.jpg", correct=True)]
+    if privacy.kind_of(lines):
+        assert privacy._hint(_p("X", []), _tokens(lines))
+
+
+def test_hint_rejects_everyday_words():
+    h = lambda *t: privacy._hint(_p("X", []), list(t))  # noqa: E731
+    for toks in (["password"], ["visa"], ["credit"], ["permit"], ["license"], ["pin"], ["login", "password", "continue"],
+                 ["visa", "booking"], ["credit", "total", "2026"], ["passport", "photos"]):
+        assert not h(*toks), toks
+
+
+def test_recent_photos_do_not_starve_a_hinted_document(monkeypatch):
+    import datetime as dt
+    from datetime import date
+
+    texts = {"PASS": PASSPORT}
+    monkeypatch.setattr(photos, "ocr_text", lambda p: texts.get(p.uuid, ["holiday"]))
+    monkeypatch.setattr(photos, "RECENT_BUDGET", 0.0)
+    recent = [_p(f"R{i}", [], days=0, date=dt.datetime(2026, 11, 1)) for i in range(200)]
+    old = _p("PASS", ["passport", "surname", "nationality", "expiry"], days=400, date=dt.datetime(2020, 1, 1))
+    db = NS(photos=lambda movies=True: recent + [old])
+    r = privacy.privacy_check(db)
+    assert [i["uuid"] for i in r["items"]] == ["PASS"] and r["partial"] is True and "last few days" in r["note"]
+    texts["PASS"] = ["PASSPORT", "Expiry: 01 JAN 2034"]
+    monkeypatch.setattr(photos, "index_words", photos.index_words)
+    e = photos.expiry(NS(photos=lambda movies=False: recent + [_p("PASS", ["passport", "expiry"], days=400, date=dt.datetime(2020, 1, 1))]),
+                      today=date(2026, 11, 8))
+    assert [i["uuid"] for i in e["items"]] == ["PASS"] and e["partial"] is True and "last few days" in e["note"]
