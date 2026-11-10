@@ -22,10 +22,20 @@ LICENCE = ["DRIVING LICENCE", "Licence No: D1234567", "Date of birth: 01 JAN 199
 
 def test_kinds():
     k = privacy.kind_of
-    assert k(PASSPORT) == "passport" and k(["PASSPORT", "Passport No: X1234567"]) == "passport"
+    assert k(PASSPORT) == "passport" and k(["PASSPORT", "Surname: SAMPLE", "Nationality: UTOPIAN"]) == "passport"
     assert k(WIFI) == "password" and k(CARD) == "card" and k(LICENCE) == "id"
     assert k(GYM) is None and k(RECEIPT) is None and k([]) is None and k(BAD_CARD) is None
     assert k(["Passport photos 4 for $8"]) is None  # the word alone is not enough
+    assert k(["Your passport", "Booking ref: AB12CD", "Passport No: X1234567"]) is None  # travel email
+    assert k(["IMEI 356938035643809", "valid thru 12/29"]) is None  # Luhn-valid 15 digits starting 35
+    assert k(["SIM 8944 5012 3456 7890 123"]) is None  # 19-20 digit SIM number
+    assert k(["4111 1111 1111 1111"]) is None  # no card word or MM/YY
+    assert k(["Card 4111 1111 1111 1111", "12/29"]) == "card" and k(["AMEX 3782 822463 10005"]) == "card"
+    assert k(["Welcome back", "Password", "Continue"]) is None  # login screen
+    assert k(["Password:", "hunter"]) is None and k(["Wi-Fi password:", "blue-mango"]) == "password"
+    assert k(["License key", "Licence No: AB-1234-CD-5678"]) is None  # software licence key
+    assert k(["PARKING PERMIT", "Permit No: 55120"]) is None
+    assert k(["DRIVING LICENCE", "Surname: SAMPLE", "Class: B"]) == "id"
 
 
 def _p(uuid, toks, days=30, **kw):
@@ -58,7 +68,7 @@ def test_privacy_check_limits(monkeypatch):
     monkeypatch.setattr(privacy, "MAX_CANDIDATES", 2)
     ps = [_p(f"U{i}", ["password"]) for i in range(5)]
     r = privacy.privacy_check(NS(photos=lambda movies=True: ps))
-    assert r["partial"] is True and r["count"] == 2 and "newest photos" in r["note"]
+    assert r["partial"] is True and r["count"] == 2 and "2 of 5" in r["note"]
     monkeypatch.setattr(privacy, "MAX_CANDIDATES", 150)
     monkeypatch.setattr(privacy, "BUDGET", -1)
     assert privacy.privacy_check(NS(photos=lambda movies=True: ps))["count"] == 0
@@ -66,6 +76,17 @@ def test_privacy_check_limits(monkeypatch):
     monkeypatch.setattr(privacy, "BUDGET", 20.0)
     r = privacy.privacy_check(NS(photos=lambda movies=True: [_p("A", None), _p("B", None)]))
     assert r["count"] == 2 and r["scanned"] == 2 and r["partial"] is False
+
+
+def test_progress_across_runs(monkeypatch):
+    monkeypatch.setattr(photos, "_recognise", lambda p: WIFI)
+    monkeypatch.setattr(privacy, "MAX_CANDIDATES", 120)
+    ps = [_p(f"U{i}", ["password"], date_modified=None, fingerprint=None) for i in range(200)]
+    db = NS(photos=lambda movies=True: ps)
+    r1 = privacy.privacy_check(db)
+    assert r1["partial"] is True and r1["checked"] == 120 and r1["candidates"] == 200 and "120 of 200" in r1["note"]
+    r2 = privacy.privacy_check(db)  # the first 120 come from the cache for free
+    assert r2["partial"] is False and r2["checked"] == 200 and r2["count"] == 200 and "note" not in r2
 
 
 @vision

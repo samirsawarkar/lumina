@@ -375,3 +375,17 @@ def test_expiry_prefilter_and_unindexed_budget(monkeypatch):
     monkeypatch.setattr(photos, "EXPIRY_BUDGET", -1)
     r = photos.expiry(db, today=date(2026, 11, 8))
     assert r["partial"] is True and r["count"] == 0
+
+
+def test_in_index_ignores_single_letter_tokens():
+    assert photos._in_index(["wifi"], ["w", "i", "f", "i", "x"]) is False
+    assert photos._in_index(["wifi"], ["wi", "fi"]) is True
+
+
+def test_expiry_hint_is_tight():
+    h = photos._exp_hint
+    for ok in (["expiry"], ["expires"], ["expiration"], ["exp."], ["exp"], ["valid", "thru"], ["valid", "to"], ["use", "by"],
+               ["renew", "by"], ["good", "thru"]):
+        assert h(ok), ok
+    for no in (["experience"], ["express"], ["explore"], ["export"], ["valid"], ["use"], ["good"], ["by"], ["thru"], ["use", "good"]):
+        assert not h(no), no

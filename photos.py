@@ -176,7 +176,7 @@ def _ts(p):
 def _in_index(words, toks) -> bool:
     """Every query word is inside a token or splits completely into tokens ('wifi' = 'wi' + 'fi')."""
     def split(w):
-        return not w or any(w.startswith(t) and split(w[len(t):]) for t in toks if t)
+        return not w or any(w.startswith(t) and split(w[len(t):]) for t in toks if len(t) > 1)  # 1-letter tokens (handwriting) would split anything
     return all(any(w in t for t in toks) or split(w) for w in words)
 
 
@@ -513,7 +513,11 @@ def document_name(lines: list[str]) -> str:
     return "Document"
 
 
-_EXP_WORDS = ("valid", "thru", "use", "renew", "good")  # tokens of every _EXP_KEY phrase; any token starting "exp" counts too
+def _exp_hint(toks) -> bool:
+    """Apple tokens that can lead to a _EXP_KEY phrase: expir*, exp, valid + thru/..., use/renew + by, good + thru."""
+    t = {x.rstrip(".") for x in toks}
+    return (any(x.startswith("expir") for x in t) or "exp" in t or "valid" in t and bool(t & {"thru", "through", "until", "till", "to"})
+            or bool({"use", "renew"} & t and "by" in t) or {"good", "thru"} <= t)
 
 
 def expiry(db, within_days=None, today=None) -> dict:
@@ -525,7 +529,7 @@ def expiry(db, within_days=None, today=None) -> dict:
     for p in ps:
         if indexed:  # a missed keyword hides a document, so the set is a superset; unindexed recent photos are read live
             toks = index_words(p)
-            if toks and not any(t.startswith("exp") or t in _EXP_WORDS for t in toks) or not toks and not _recent(p):
+            if toks and not _exp_hint(toks) or not toks and not _recent(p):
                 continue
         if time.monotonic() - t0 > EXPIRY_BUDGET:
             partial = True
