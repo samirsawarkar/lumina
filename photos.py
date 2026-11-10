@@ -158,8 +158,25 @@ def index_words(p) -> list[str]:
         return []
 
 
-def _has_index(ps) -> bool:
-    return any(index_words(p) for p in ps)
+def _has_index(db, ps) -> bool:
+    """Does Apple's text index exist? Computed once and stored on the db object (get_db() makes a new one when the library changes)."""
+    r = getattr(db, "_lumina_indexed", None)
+    if r is None:
+        r = any(index_words(p) for p in ps)
+        try:
+            db._lumina_indexed = r
+        except Exception:  # object refuses attributes: just recompute next time
+            pass
+    return r
+
+
+def _cached_lines(cache, p):
+    """Cached OCR lines for p from `_load_cache()`, or None (missing, stale or unreadable row)."""
+    try:
+        row = cache.get(p.uuid)
+        return json.loads(row[1]) if row and row[0] == _sig(p) else None
+    except Exception:
+        return None
 
 
 def _recent(p) -> bool:
@@ -175,8 +192,14 @@ def _ts(p):
 
 def _in_index(words, toks) -> bool:
     """Every query word is inside a token or splits completely into tokens ('wifi' = 'wi' + 'fi')."""
-    def split(w):
-        return not w or any(w.startswith(t) and split(w[len(t):]) for t in toks if len(t) > 1)  # 1-letter tokens (handwriting) would split anything
+    long = [t for t in toks if len(t) > 1]  # 1-letter tokens (handwriting) would split anything
+
+    def split(w):  # positions of w reachable by chaining tokens; linear in len(w) * tokens
+        ok = {0}
+        for i in range(len(w)):
+            if i in ok:
+                ok.update(i + len(t) for t in long if w.startswith(t, i))
+        return len(w) in ok
     return all(any(w in t for t in toks) or split(w) for w in words)
 
 
@@ -236,7 +259,7 @@ def search(db, text=None, person=None, place=None, label=None, date_from=None, d
     hits, pending = [], []
     t0 = time.monotonic()
     ps = list(db.photos(movies=True))
-    indexed = _has_index(ps)
+    indexed = _has_index(db, ps)
     words = [w for w in re.split(r"[\s\-]+", text.lower()) if w] if text else []
     cache = _load_cache() if text else {}
     # ponytail: linear scan over db.photos(); add an index if libraries >100k feel slow
@@ -267,11 +290,11 @@ def search(db, text=None, person=None, place=None, label=None, date_from=None, d
             hay = [p.title, p.description, p.place.name if p.place else "", *(p.labels or []), *(p.keywords or [])]
             if not any(t in low(h) for h in hay):
                 toks = index_words(p)
-                row = cache.get(p.uuid)
+                lines = _cached_lines(cache, p)
                 if toks and _in_index(words, toks):
                     pass
-                elif row and row[0] == _sig(p):
-                    if not any(t in low(s) for s in json.loads(row[1])):
+                elif lines is not None:
+                    if not any(t in low(s) for s in lines):
                         continue
                 elif p.ismovie or (indexed and (toks or not _recent(p))):
                     continue  # Apple's index covers it (no match) or it is not worth a live read
@@ -525,7 +548,7 @@ def expiry(db, within_days=None, today=None) -> dict:
     today = today or dt.date.today()
     t0, items, partial = time.monotonic(), [], False
     ps = sorted((p for p in db.photos(movies=False) if not (p.hidden or p.intrash or p.ismovie)), key=_ts, reverse=True)
-    indexed = _has_index(ps)
+    indexed = _has_index(db, ps)
     for p in ps:
         if indexed:  # a missed keyword hides a document, so the set is a superset; unindexed recent photos are read live
             toks = index_words(p)

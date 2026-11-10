@@ -263,6 +263,7 @@ def test_text_search_ignores_hyphens(library, monkeypatch):
     monkeypatch.setenv("LUMINA_LIBRARY", library)
     monkeypatch.setattr(photos, "ocr_text", lambda q: ["WI-FI password: blue-mango"])
     monkeypatch.setattr(photos, "index_words", lambda p: [])  # old-macOS path: no Apple index, live recognition
+    monkeypatch.setattr(photos, "_has_index", lambda db, ps: False)
     assert json.loads(_call("lumina_search", {"text": "wifi"}))["total_matches"] > 0
     assert json.loads(_call("lumina_search", {"text": "zz-no-such-text"}))["total_matches"] == 0
 
