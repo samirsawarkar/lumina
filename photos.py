@@ -293,13 +293,13 @@ def search(db, text=None, person=None, place=None, label=None, date_from=None, d
             continue
         if person and not any(low(person) in low(x) for x in p.persons or []):
             continue
-        if place and low(place) not in low(p.place.name if p.place else ""):
+        if place and not any(low(place) in low(x) for x in [p.place.name if p.place else "", *(getattr(p, "albums", None) or [])]):  # "Goa Trip" album counts
             continue
         if label and not any(low(label) in low(x) for x in p.labels or []):
             continue
         if text:
             t = low(text)
-            hay = [p.title, p.description, p.place.name if p.place else "", *(p.labels or []), *(p.keywords or [])]
+            hay = [p.title, p.description, p.place.name if p.place else "", *(p.labels or []), *(p.keywords or []), *(getattr(p, "albums", None) or [])]
             if not any(t in low(h) for h in hay):
                 toks = index_words(p)
                 lines = _cached_lines(cache, p)
