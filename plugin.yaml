@@ -1,6 +1,6 @@
 name: lumina
 version: "0.1.0"
-description: "Ask Hermes about your Apple Photos library: find photos by person, place, scene or text in the image, and build albums. Reads Apple's on-device analysis via osxphotos. macOS only, no network."
+description: "Protects the private documents in your Apple Photos: a privacy check-up finds passports, cards and passwords, Safe Send makes verified redacted copies, and Leak Guard stops Hermes sending a raw ID off your Mac. Also searches photos by person, place, scene or text and makes albums and memory videos. macOS only, on-device."
 author: "Samir Sawarkar"
 license: MIT
 platforms: [macos]

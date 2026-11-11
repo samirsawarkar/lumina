@@ -1,10 +1,37 @@
-# Lumina — ask your photo library anything
+# Lumina
 
-Lumina is a photo assistant for Apple Photos in Hermes that also protects your private documents. Search people, places, scenes, and text inside your library, build albums, or relive memories on this day — completely private and running on your Mac.
+**The Hermes plugin that protects the private documents hiding in your Apple Photos.**
 
-![Lumina in Hermes Desktop](docs/img/hero.png)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+![Platform: macOS](https://img.shields.io/badge/platform-macOS-black.svg)
+![Hermes >= 0.23](https://img.shields.io/badge/Hermes-%E2%89%A5%200.23-blue.svg)
+![Runs on-device](https://img.shields.io/badge/runs-on--device-purple.svg)
 
-![Lumina Demo](docs/img/demo.gif)
+Your camera roll holds your passport, your cards and a few passwords. Lumina finds them, makes safe copies with the sensitive parts hidden, and stops Hermes from sending a raw ID off your Mac. It is also a full photo assistant: search by person, place, scene or the text inside a photo, build albums, and make memory videos. Everything runs on your Mac.
+
+| Privacy check-up | Safe Send |
+|---|---|
+| ![Privacy check-up in Hermes Desktop](docs/img/checkup.png) | ![Safe Send card in Hermes Desktop](docs/img/safe-send.png) |
+
+## Quick start
+
+```bash
+hermes plugins install samirsawarkar/lumina
+```
+
+1. Turn on **Lumina** in Hermes Desktop under **Settings > Plugins > Desktop plugins**.
+2. Give Hermes **Full Disk Access** so it can read your Photos library (see [First run & permissions](#first-run--permissions)).
+3. Ask: **"What sensitive documents are in my photos?"**
+
+### Try it without your own photos
+
+You can test Lumina on sample documents instead of your real library:
+
+1. Quit Photos. Hold **Option** while opening Photos and choose **Create New…** to make an empty library.
+2. Drag the six sample images from [`tests/fixtures`](tests/fixtures) into Photos. They are made-up documents (a specimen passport, a Wi-Fi sign, a boarding pass and so on).
+3. Ask Hermes: "What sensitive documents are in my photos?", then "Send my passport to the hotel".
+
+Lumina uses the library Photos opened last. To switch back, hold Option while opening Photos and pick your own library.
 
 ---
 
