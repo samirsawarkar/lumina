@@ -1,0 +1,28 @@
+name: lumina
+version: "0.1.0"
+description: "Ask Hermes about your Apple Photos library: find photos by person, place, scene or text in the image, and build albums. Reads Apple's on-device analysis via osxphotos. macOS only, no network."
+author: "Samir Sawarkar"
+license: MIT
+platforms: [macos]
+requires_hermes: ">=0.23"
+provides_tools:
+  - lumina_search
+  - lumina_create_album
+  - lumina_library_info
+  - lumina_on_this_day
+  - lumina_export
+  - lumina_read_text
+  - lumina_expiry
+  - lumina_make_memory
+  - lumina_redact
+  - lumina_privacy_check
+provides_hooks:
+  - pre_tool_call
+  - post_tool_call
+  - transform_llm_output
+  - pre_llm_call
+python_dependencies:
+  - "osxphotos>=0.70,<1"
+  - "photoscript>=0.4,<1"
+  - "Pillow>=10,<14"
+  - "pyobjc-framework-Vision>=10,<14"  # Safe Send text boxes; already pulled in by osxphotos
