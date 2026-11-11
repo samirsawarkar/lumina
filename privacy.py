@@ -66,7 +66,8 @@ def kind_of(lines: list[str]) -> str | None:
     joined = " ".join(lines)
     if any(k == "mrz" and "<<" in lines[i] for i, k, _, _ in hits) or (re.search(r"\bpassport\b", joined, re.I) and _labels(joined, _PP_LABELS) >= 2):
         return "passport"
-    if any(_card(m.group()) for l in lines for m in _CARD_RE.finditer(l)) and _CARD_WORD.search(joined):
+    quads = " ".join(l.strip() for l in lines if re.fullmatch(r"\d{4}", l.strip()))  # number read as groups of four
+    if any(_card(m.group()) for l in [*lines, quads] for m in _CARD_RE.finditer(l)) and _CARD_WORD.search(joined):
         return "card"
     if any(k == "password" and (re.search(r"\d", lines[i][a:b]) or _NET.search(joined)) for i, k, a, b in hits):
         return "password"

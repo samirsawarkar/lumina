@@ -122,14 +122,15 @@ _BARE_PW = re.compile(r"\b(?:password|passcode|pin)\s*:?\s*$", _I)
 _DOB = re.compile(r"\b(?:birth|dob|born)\b[\s:.\-]*(.*)$", _I)
 _TOKEN = re.compile(r"(?<![A-Za-z0-9])(?:[A-Za-z0-9]{6,}|[A-Z0-9]+(?:-[A-Z0-9]+)+)(?![A-Za-z0-9])")
 _RUN = re.compile(r"(?<![\w.,$:/+])\d(?:[ \-]?\d){5,}(?![\w.,:/])")
-_DATE = re.compile(r"\d{4}-\d{2}-\d{2}|\d{1,2}[/.]\d{1,2}[/.]\d{2,4}")
+_DATE = re.compile(r"\d{4}-\d{2}-\d{2}|\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}")
 _EMAIL = re.compile(r"[\w.+\-]+@[\w\-]+(?:\.[\w\-]+)+")
 _PHONE = re.compile(r"(?<![\w.])\+?\d[\d ()\-]{7,}\d(?![\w.])")
 _MRZ = re.compile(r"[A-Z0-9<]{20,}")
 
 
 def _is_mrz(s: str) -> bool:
-    return "<<<" in s or bool(_MRZ.fullmatch(s.replace(" ", "")))
+    # needs a filler: an all-caps title ("STATE MOTOR DRIVING LICENCE") is not a machine-readable line
+    return "<<<" in s or ("<" in s and bool(_MRZ.fullmatch(s.replace(" ", ""))))
 
 
 def classify(texts: list[str]) -> list[tuple]:
@@ -152,6 +153,8 @@ def classify(texts: list[str]) -> list[tuple]:
                 out.add((i, "dob", m.start(1), m.start(1) + len(m.group(1).rstrip())))
             elif i + 1 < len(texts) and re.search(r"\d", texts[i + 1]) and ":" not in texts[i + 1]:
                 out.add((i + 1, "dob", 0, len(texts[i + 1])))
+            elif i and (d := _DATE.search(texts[i - 1])):  # value read before its label
+                out.add((i - 1, "dob", d.start(), d.end()))
         for m in _TOKEN.finditer(s):
             if re.search(r"\d", m.group()) and not _DATE.fullmatch(m.group()):
                 out.add((i, "number", m.start(), m.end()))
@@ -162,6 +165,10 @@ def classify(texts: list[str]) -> list[tuple]:
             out.add((i, "contact", m.start(), m.end()))
         for m in _PHONE.finditer(s):
             out.add((i, "contact", m.start(), m.end()))
+    quads = [i for i, s in enumerate(texts) if re.fullmatch(r"\d{4}", s.strip())]
+    if len(quads) >= 3:  # a card number read as separate groups of four
+        # ponytail: three lone 4-digit lines (e.g. years in a column) are also hidden; tighten with Luhn if that bites
+        out |= {(i, "number", 0, len(texts[i])) for i in quads}
     out = {h for h in out if h[3] > h[2]}
     return sorted(h for h in out if not any(o != h and o[:2] == h[:2] and o[2] <= h[2] and h[3] <= o[3] for o in out))
 

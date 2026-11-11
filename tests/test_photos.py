@@ -459,3 +459,11 @@ def test_indexed_search_partial_note_is_about_recent_photos(monkeypatch):
     db = NS(photos=lambda movies=True: [_ix("I", ["a"]), _ix("R", [], days_old=1)])
     r = photos.search(db, text="gate")
     assert r["text_scan"] == "partial" and "last few days" in r["note"] and "part of the library" not in r["note"]
+
+
+def test_expiry_real_photo_layouts():
+    import datetime as dt
+    assert photos.parse_expiry(["Valid Till : 01-02-2041 (NT)"]) == dt.date(2041, 2, 1)
+    pp = ["Berckt sitod", "tea/Passport No.", "e faDate of Expiry", "a faeDate of Isse", "28/07/2033", "29/07/2023"]
+    assert photos.parse_expiry(pp) == dt.date(2033, 7, 28)
+    assert photos.document_name(pp) == "Passport"

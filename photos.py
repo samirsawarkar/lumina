@@ -490,7 +490,7 @@ _DATE = re.compile(
     r"|(?P<d1>\d{1,2})\s+(?P<m1>[A-Za-z]{3,9})\.?,?\s+(?P<y1>\d{4})"
     r"|(?P<m2>[A-Za-z]{3,9})\.?\s+(?P<d2>\d{1,2}),?\s+(?P<y2>\d{4})"
     r"|(?P<m3>[A-Za-z]{3,9})\.?,?\s+(?P<y3>\d{4})"
-    r"|(?<!\d)(?P<a>\d{1,2})/(?P<b>\d{1,2})/(?P<y4>\d{4})(?!\d)"
+    r"|(?<!\d)(?P<a>\d{1,2})[/\-](?P<b>\d{1,2})[/\-](?P<y4>\d{4})(?!\d)"
     r"|(?<!\d)(?P<m5>\d{1,2})/(?P<y5>\d{4}|\d{2})(?!\d)")
 
 
@@ -536,13 +536,20 @@ def parse_expiry(lines: list[str]) -> dt.date | None:
     found = []
     for i, line in enumerate(lines):
         for k in _EXP_KEY.finditer(line):
-            ds = _dates_in(line[k.end():]) or (_dates_in(lines[i + 1]) if i + 1 < len(lines) and _just_date(lines[i + 1]) else [])
+            ds = _dates_in(line[k.end():])
+            for nxt in lines[i + 1:i + 4]:  # value on a later line (two-column passports put labels first)
+                if ds and not (_just_date(nxt) and _dates_in(nxt)):
+                    break
+                if _just_date(nxt):
+                    ds = ds + _dates_in(nxt)
             found += ds
     return max(found) if found else None
 
 
 def document_name(lines: list[str]) -> str:
     """First OCR line with letters, title-cased, max 40 chars."""
+    if m := re.search(r"\b(passport|driving licen[cs]e)\b", " ".join(lines), re.I):  # real photos start with noise
+        return m.group(0).title()
     for s in lines:
         if re.search(r"[A-Za-z]", s):
             return s.strip().title()[:40].strip()

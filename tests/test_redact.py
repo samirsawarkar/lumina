@@ -164,3 +164,16 @@ def test_safe_name_never_uses_a_person_name():
     assert redact.safe_name(["ALEX SAMPLE", "DOB: 01/02/1990", "ID: D1234-5678"]) == "Document"
     assert redact.safe_name(["IRONWORKS GYM", "MEMBER: ALEX SAMPLE"]) == "Gym"
     assert redact.safe_name(["PASSPORT", "Surname: SAMPLE"]) == "Passport"
+
+
+def test_real_photo_layouts():
+    """All-caps titles are not MRZ, dd-mm-yyyy is a date, DOB may precede its label, card numbers may be split."""
+    from lumina import privacy
+    lic = ["UTOPIA STATE MOTOR DRIVING LICENCE", "DOI: 01-02-2020", "DL No : XX00 20200000000", ": 01-01-1990", "DOB", "Address :"]
+    hits = {(k, lic[i][a:b]) for i, k, a, b in redact.classify(lic)}
+    assert not any(k == "mrz" for k, _ in hits)
+    assert ("dob", "01-01-1990") in hits and ("number", "XX00 20200000000") in hits
+    assert ("number", "01-02-2020") not in hits
+    card = ["HDFC BANK", "4242", "4242", "4242", "4242", "YARU 08/29", "VISA"]
+    assert sum(k == "number" for _, k, _, _ in redact.classify(card)) == 4
+    assert privacy.kind_of(card) == "card"
