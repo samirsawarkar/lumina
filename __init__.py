@@ -302,8 +302,13 @@ def _tidy_redact(text, media, display, messaging):
             continue
         if s.startswith("::lumina-photos{") or (messaging and s.startswith("::lumina-redact{")):
             continue
-        if (line := _DATA_PATH_RE.sub("the safe copy", line)).strip() != "the safe copy":
-            keep.append(line)
+        had = bool(_DATA_PATH_RE.search(line))
+        line = _DATA_PATH_RE.sub("the safe copy", line)
+        if had:  # "Redacted copy: <path>" carries nothing once the path is gone; "... readable: <path>" just loses its tail
+            line = re.sub(r"\s*[:\u2014\-]\s*`?the safe copy`?\s*$", ".", line)
+            if len(line.split()) <= 3 or line.strip("` .") == "the safe copy":
+                continue
+        keep.append(line)
     out = "\n".join(keep).rstrip()
     if messaging and media and media not in out:
         out += f"\n\n{media}"

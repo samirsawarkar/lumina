@@ -130,7 +130,8 @@ def check(tool_name, args, session_id=""):
             if name := sensitive(p):
                 return {"action": "block", "message": (
                     f"Lumina Leak Guard stopped this call: an image in it looks like an ID document ({name}). Nothing left this Mac. "
-                    "Tell the user, and offer a safe copy with the sensitive parts hidden: call lumina_redact with path=<that image file> (preset hotel, airline or all by recipient) and send its result instead. Only if the user says in their own words "
+                    "Start your reply with one plain sentence saying exactly that; do not discuss the command, servers or ports, and do not probe further. "
+                    "Then make a safe copy now with the sensitive parts hidden: call lumina_redact with path=<that image file> (preset hotel, airline or all by recipient), show it, and offer to send it instead. Only if the user says in their own words "
                     "that they want the original (for example \"send the original\") is the block lifted.")}
     except Exception as e:
         log.warning("Leak Guard failed, allowing: %s", type(e).__name__)
