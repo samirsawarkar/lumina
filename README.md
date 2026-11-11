@@ -13,8 +13,8 @@ Finds them. Makes safe copies. Stops the agent from leaking them. All on your Ma
 </p>
 
 <p align="center">
-<a href="https://github.com/samirsawarkar/lumina/releases/download/v0.1.0/lumina-demo.mp4"><img src="docs/img/demo.gif" alt="Lumina demo: privacy check-up, Safe Send and Leak Guard in Hermes Desktop" width="760"></a><br>
-<a href="https://github.com/samirsawarkar/lumina/releases/download/v0.1.0/lumina-demo.mp4">▶ Watch the full 78-second demo</a>
+<a href="https://github.com/samirsawarkar/lumina/releases/download/v0.1.0/lumina-demo-v2.mp4"><img src="docs/img/demo.gif" alt="Lumina demo: privacy check-up, Safe Send and Leak Guard in Hermes Desktop" width="760"></a><br>
+<a href="https://github.com/samirsawarkar/lumina/releases/download/v0.1.0/lumina-demo-v2.mp4">▶ Watch the full 78-second demo</a>
 </p>
 
 ```bash
