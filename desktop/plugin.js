@@ -433,8 +433,8 @@ function RedactCard({ data }) {
         className: 'relative w-full overflow-hidden rounded outline-none focus-visible:ring-1',
         style: { backgroundColor: 'var(--ui-bg-tertiary)', border: '1px solid var(--ui-stroke-tertiary)', cursor: 'ew-resize', touchAction: 'none' },
         children: [
-          jsx('img', { src: data.before, alt: 'Original', className: 'absolute top-0 left-0 w-full h-auto pointer-events-none select-none' }),
-          jsx('img', { src: data.after, alt: 'Safe copy', className: 'relative block w-full h-auto pointer-events-none select-none', style: { clipPath: `inset(0 0 0 ${pos}%)` } }),
+          jsx('img', { src: data.before, alt: 'Original', className: 'absolute top-0 left-0 w-full h-auto pointer-events-none select-none', style: { margin: 0 } }),
+          jsx('img', { src: data.after, alt: 'Safe copy', className: 'relative block w-full h-auto pointer-events-none select-none', style: { margin: 0, clipPath: `inset(0 0 0 ${pos}%)` } }),
           jsx('span', { className: 'absolute top-2 left-2 text-[10px] font-semibold px-1.5 py-0.5 rounded pointer-events-none select-none', style: { backgroundColor: 'var(--ui-bg-primary)', color: 'var(--ui-text-primary)', border: '1px solid var(--ui-stroke-secondary)' }, children: 'Original' }),
           jsx('span', { className: 'absolute top-2 right-2 text-[10px] font-semibold px-1.5 py-0.5 rounded pointer-events-none select-none', style: { backgroundColor: 'var(--ui-bg-primary)', color: 'var(--ui-text-primary)', border: '1px solid var(--ui-stroke-secondary)' }, children: 'Safe copy' }),
           jsxs('div', {
