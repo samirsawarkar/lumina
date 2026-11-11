@@ -1,7 +1,7 @@
 name: lumina
 version: "0.1.0"
 description: "Ask Hermes about your Apple Photos library: find photos by person, place, scene or text in the image, and build albums. Reads Apple's on-device analysis via osxphotos. macOS only, no network."
-author: "Samir Sawkar"
+author: "Samir Sawarkar"
 license: MIT
 platforms: [macos]
 requires_hermes: ">=0.23"
