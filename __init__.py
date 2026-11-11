@@ -71,6 +71,7 @@ def _display(a, res, title=None):
 
 
 def _search(a):
+    a = {**a, "text": a.get("text") or a.get("query") or a.get("q")}  # models often say `query`
     res = photos.search(photos.get_db(), **{k: a[k] for k in _SEARCH_KEYS if a.get(k) is not None})
     res.setdefault("all_uuids", [p["uuid"] for p in res["photos"]])
     if d := _display(a, res):

@@ -416,3 +416,11 @@ def test_safe_send_never_forwards_another_media_line():
     lumina._remember("lumina_redact", json.dumps({"media": M, "display": '::lumina-redact{id="abcdef012345"}'}), session_id="s")
     out = lumina._append(f"MEDIA:/h/plugin-data/x/exports/ORIG.jpg\n{M}", session_id="s", platform="telegram")
     assert "ORIG" not in out and out.count(M) == 1
+
+
+def test_search_accepts_query_as_text(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(lumina.photos, "get_db", lambda: None)
+    monkeypatch.setattr(lumina.photos, "search", lambda db, **k: seen.update(k) or {"count": 0, "total_matches": 0, "photos": []})
+    lumina._search({"query": "passport"})
+    assert seen.get("text") == "passport"
